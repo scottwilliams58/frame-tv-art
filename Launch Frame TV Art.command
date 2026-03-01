@@ -3,7 +3,8 @@
 # Double-click this file (or keep it in your Dock) to start the app.
 # A browser tab opens automatically. Close this Terminal window to stop it.
 
-APP_DIR="/Users/scottwilliams/Documents/Claude Code/frame-tv-art"
+# Resolve the directory containing this script — works wherever the file lives
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT=5001
 
 echo "🖼  Frame TV Art Uploader"

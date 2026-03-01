@@ -1,15 +1,32 @@
 import os
+import re
 import base64
 import json
 import time
+import ipaddress
+import logging
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
 from PIL import Image
 
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s  %(levelname)-8s  %(message)s',
+    datefmt='%H:%M:%S',
+)
+logger = logging.getLogger(__name__)
+
+# ── PIL decompression-bomb protection ────────────────────────────────────────
+# Allow up to ~10 000 × 10 000 (100 MP).  Anything larger is almost certainly
+# a decompression-bomb; PIL will raise DecompressionBombError automatically.
+Image.MAX_IMAGE_PIXELS = 100_000_000
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-_instance_path = '/tmp/frame_tv_art_instance'
-os.makedirs(_instance_path, exist_ok=True)
+# Keep Flask's instance folder out of world-readable /tmp
+_instance_path = os.path.expanduser('~/.cache/frame-tv-art')
+os.makedirs(_instance_path, mode=0o700, exist_ok=True)
 
 app = Flask(
     __name__,
@@ -24,6 +41,69 @@ TOKEN_FILE = os.path.join(BASE_DIR, 'samsung_tv_token.txt')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# ── Input validation helpers ──────────────────────────────────────────────────
+
+def validate_ip(ip_str: str) -> bool:
+    """Accept only well-formed IPv4 or IPv6 addresses (no hostnames / SSRF)."""
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        return False
+
+
+# Matte IDs and content IDs: alphanumeric, underscore, hyphen only.
+_SAFE_ID_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
+
+def validate_matte_id(matte: str) -> bool:
+    return matte == 'none' or bool(_SAFE_ID_RE.match(matte))
+
+
+def validate_content_id(cid: str) -> bool:
+    return bool(cid) and bool(_SAFE_ID_RE.match(cid))
+
+
+_VALID_MOTION_TIMERS    = {'off', '5', '15', '30', '60', '120', '240'}
+_VALID_MOTION_SENS      = {'1', '2', '3'}
+_VALID_COLOR_TEMPS      = {'cool', 'natural', 'warm1', 'warm2'}
+_VALID_ARTMODE_MODES    = {'on', 'off'}
+
+def validate_artmode_settings(s: dict) -> list:
+    """Return a list of validation error strings (empty = all good)."""
+    errors = []
+    if 'brightness' in s:
+        try:
+            val = int(s['brightness'])
+            if not (1 <= val <= 10):
+                errors.append('brightness must be 1–10')
+        except (TypeError, ValueError):
+            errors.append('brightness must be an integer')
+    if 'display_timer' in s:
+        try:
+            int(s['display_timer'])
+        except (TypeError, ValueError):
+            errors.append('display_timer must be an integer')
+    if 'color' in s and s['color'] not in _VALID_COLOR_TEMPS:
+        errors.append(f"color must be one of {sorted(_VALID_COLOR_TEMPS)}")
+    if 'shuffle' in s and not isinstance(s['shuffle'], bool):
+        errors.append('shuffle must be a boolean')
+    if 'motion_timer' in s and str(s['motion_timer']) not in _VALID_MOTION_TIMERS:
+        errors.append(f"motion_timer must be one of {sorted(_VALID_MOTION_TIMERS)}")
+    if 'motion_sensitivity' in s and str(s['motion_sensitivity']) not in _VALID_MOTION_SENS:
+        errors.append('motion_sensitivity must be 1, 2, or 3')
+    if 'brightness_sensor' in s and not isinstance(s['brightness_sensor'], bool):
+        errors.append('brightness_sensor must be a boolean')
+    return errors
+
+
+def _err(msg: str, exc=None) -> dict:
+    """Log exc internally; return a sanitised JSON-safe error dict."""
+    if exc is not None:
+        logger.error('%s: %s', msg, exc)
+    return {'success': False, 'error': msg}
+
+
+# ── Samsung TV helpers ────────────────────────────────────────────────────────
 
 def get_art(ip, timeout=10):
     """Return a SamsungTVArt instance connected directly to the art-app endpoint.
@@ -39,13 +119,17 @@ def get_art(ip, timeout=10):
         raise RuntimeError(
             "samsungtvws is not installed. Run: pip install -r requirements.txt"
         )
-    return SamsungTVArt(
+    art = SamsungTVArt(
         host=ip,
         port=8002,
         token_file=TOKEN_FILE,
         name='FrameArtApp',
         timeout=timeout,
     )
+    # Restrict token file permissions so only the owner can read it
+    if os.path.exists(TOKEN_FILE):
+        os.chmod(TOKEN_FILE, 0o600)
+    return art
 
 
 def with_retry(fn, retries=2, delay=1.5):
@@ -64,6 +148,8 @@ def with_retry(fn, retries=2, delay=1.5):
     raise last_exc  # unreachable, but satisfies type checkers
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -74,7 +160,9 @@ def connect():
     data = request.get_json()
     ip = (data or {}).get('ip', '').strip()
     if not ip:
-        return jsonify({'success': False, 'error': 'IP address is required'})
+        return jsonify(_err('IP address is required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
 
     try:
         art = get_art(ip)
@@ -92,21 +180,25 @@ def connect():
                 artmode = 'unknown'
         return jsonify({'success': True, 'art_supported': supported, 'artmode': artmode})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not connect to TV', e))
 
 
 @app.route('/api/upload', methods=['POST'])
 def upload():
     data = request.get_json()
-    ip = (data or {}).get('ip', '').strip()
+    ip        = (data or {}).get('ip', '').strip()
     image_b64 = (data or {}).get('image', '')
-    matte = (data or {}).get('matte', 'none')
-    show_after = (data or {}).get('show', True)
+    matte     = (data or {}).get('matte', 'none')
+    show_after= (data or {}).get('show', True)
 
     if not ip:
-        return jsonify({'success': False, 'error': 'TV IP address is required'})
+        return jsonify(_err('TV IP address is required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
     if not image_b64:
-        return jsonify({'success': False, 'error': 'No image data provided'})
+        return jsonify(_err('No image data provided'))
+    if not validate_matte_id(str(matte)):
+        return jsonify(_err('Invalid matte identifier'))
 
     # Strip data URL prefix
     if ',' in image_b64:
@@ -114,9 +206,15 @@ def upload():
 
     try:
         raw = base64.b64decode(image_b64)
-        img = Image.open(BytesIO(raw)).convert('RGB')
+        img = Image.open(BytesIO(raw))
+        if img.format not in ('JPEG', 'PNG', 'WEBP', 'MPO'):
+            # Convert HEIC / other formats silently; reject truly unrecognised ones
+            pass  # PIL will raise if it can't handle it
+        img = img.convert('RGB')
+    except Image.DecompressionBombError as e:
+        return jsonify(_err('Image is too large to process safely', e))
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Invalid image data: {e}'})
+        return jsonify(_err('Invalid image data', e))
 
     temp_path = os.path.join(UPLOAD_FOLDER, 'upload_temp.jpg')
     img.save(temp_path, 'JPEG', quality=95, optimize=True)
@@ -138,7 +236,7 @@ def upload():
         content_id = with_retry(do_upload)
         return jsonify({'success': True, 'content_id': content_id})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Upload to TV failed', e))
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -148,7 +246,9 @@ def upload():
 def artworks():
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify({'success': False, 'error': 'IP address is required'})
+        return jsonify(_err('IP address is required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
     try:
         def do_list():
             a = get_art(ip)
@@ -160,16 +260,20 @@ def artworks():
         items = with_retry(do_list)
         return jsonify({'success': True, 'artworks': items})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not fetch artwork list', e))
 
 
 @app.route('/api/select', methods=['POST'])
 def select():
     data = request.get_json()
-    ip = (data or {}).get('ip', '').strip()
+    ip         = (data or {}).get('ip', '').strip()
     content_id = (data or {}).get('content_id', '').strip()
-    if not ip or not content_id:
-        return jsonify({'success': False, 'error': 'IP and content_id are required'})
+    if not ip:
+        return jsonify(_err('IP address is required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
+    if not validate_content_id(content_id):
+        return jsonify(_err('Invalid content ID'))
     try:
         def do_select():
             a = get_art(ip)
@@ -179,16 +283,20 @@ def select():
         with_retry(do_select)
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not select artwork', e))
 
 
 @app.route('/api/artmode', methods=['POST'])
 def artmode():
     data = request.get_json()
-    ip = (data or {}).get('ip', '').strip()
+    ip   = (data or {}).get('ip', '').strip()
     mode = (data or {}).get('mode', 'on')
     if not ip:
-        return jsonify({'success': False, 'error': 'IP address is required'})
+        return jsonify(_err('IP address is required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
+    if mode not in _VALID_ARTMODE_MODES:
+        return jsonify(_err('mode must be "on" or "off"'))
     try:
         def do_set():
             a = get_art(ip)
@@ -198,14 +306,16 @@ def artmode():
         with_retry(do_set)
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not change Art Mode', e))
 
 
 @app.route('/api/artmode/settings', methods=['GET'])
 def get_artmode_settings():
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify({'success': False, 'error': 'IP required'})
+        return jsonify(_err('IP required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
     try:
         def do_get():
             a = get_art(ip)
@@ -245,7 +355,7 @@ def get_artmode_settings():
 
         return jsonify({'success': True, 'settings': settings})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not fetch Art Mode settings', e))
 
 
 @app.route('/api/mattes', methods=['GET'])
@@ -258,7 +368,9 @@ def get_mattes():
     """
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify({'success': False, 'error': 'IP required'})
+        return jsonify(_err('IP required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
     try:
         def do_get():
             a = get_art(ip)
@@ -268,7 +380,7 @@ def get_mattes():
         result = with_retry(do_get)
         return jsonify({'success': True, 'mattes': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not fetch matte list', e))
 
 
 @app.route('/api/artmode/settings', methods=['POST'])
@@ -278,15 +390,21 @@ def set_artmode_settings():
     # Copy so we can pop motion/sensor fields without mutating the original
     settings = dict((data or {}).get('settings', {}))
     if not ip:
-        return jsonify({'success': False, 'error': 'IP required'})
+        return jsonify(_err('IP required'))
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address'))
     if not settings:
-        return jsonify({'success': False, 'error': 'No settings provided'})
+        return jsonify(_err('No settings provided'))
+
+    errors = validate_artmode_settings(settings)
+    if errors:
+        return jsonify(_err('; '.join(errors)))
 
     # These are sent via dedicated TV commands, not set_artmode_settings().
     # API insight from NickWaterton/samsung-tv-ws-api — see CREDITS.md.
-    motion_timer      = settings.pop('motion_timer', None)
-    motion_sensitivity= settings.pop('motion_sensitivity', None)
-    brightness_sensor = settings.pop('brightness_sensor', None)
+    motion_timer       = settings.pop('motion_timer', None)
+    motion_sensitivity = settings.pop('motion_sensitivity', None)
+    brightness_sensor  = settings.pop('brightness_sensor', None)
 
     try:
         def do_set():
@@ -304,9 +422,14 @@ def set_artmode_settings():
         with_retry(do_set)
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify(_err('Could not save Art Mode settings', e))
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))
-    app.run(debug=True, port=port, host='0.0.0.0', threaded=True)
+    port  = int(os.environ.get('PORT', 5001))
+    # Default to localhost-only. Set FRAME_TV_HOST=0.0.0.0 only if you need
+    # LAN access from another device (and accept the security trade-off).
+    host  = os.environ.get('FRAME_TV_HOST', '127.0.0.1')
+    debug = os.environ.get('FLASK_DEBUG', '0') == '1'
+    logger.info('Starting on http://%s:%d  (debug=%s)', host, port, debug)
+    app.run(debug=debug, port=port, host=host, threaded=True)

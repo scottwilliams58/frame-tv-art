@@ -744,10 +744,21 @@ async function loadArtworks() {
       const id = item.content_id || item.id || '';
       const div = document.createElement('div');
       div.className = 'artwork-item';
-      div.title = `ID: ${id}\nClick to display on TV`;
-      div.innerHTML = `
-        <div class="artwork-thumb"><i data-lucide="image" style="width:18px;height:18px;opacity:.4"></i></div>
-        <span>${id.slice(-8) || 'art'}</span>`;
+      // Use textContent / setAttribute — never innerHTML — with TV-sourced data
+      div.setAttribute('title', `ID: ${id}\nClick to display on TV`);
+
+      const thumb = document.createElement('div');
+      thumb.className = 'artwork-thumb';
+      const icon = document.createElement('i');
+      icon.setAttribute('data-lucide', 'image');
+      icon.style.cssText = 'width:18px;height:18px;opacity:.4';
+      thumb.appendChild(icon);
+
+      const label = document.createElement('span');
+      label.textContent = id.slice(-8) || 'art';
+
+      div.appendChild(thumb);
+      div.appendChild(label);
       div.addEventListener('click', () => selectArtwork(id));
       artworksGrid.appendChild(div);
     });

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+venv/
+env/
+
+# App
+uploads/
+samsung_tv_token.txt
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/

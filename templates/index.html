@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Frame TV Art Uploader</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+<div id="toast" class="toast" aria-live="polite"></div>
+
+<div class="app">
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <i data-lucide="tv-2" class="logo-icon"></i>
+        <span>Frame TV Art Uploader</span>
+      </div>
+      <div class="header-badge">Samsung Frame 2024</div>
+    </div>
+  </header>
+
+  <!-- ── Main ── -->
+  <main class="main">
+
+    <!-- LEFT: image + cropper -->
+    <section class="panel panel--left">
+      <div class="section-header">
+        <span class="section-label">Image &amp; Crop</span>
+        <label class="bulk-toggle-label">
+          <span class="bulk-toggle-text">Bulk mode</span>
+          <button role="switch" aria-checked="false" class="switch" id="bulkModeSwitch"></button>
+        </label>
+      </div>
+
+      <!-- Upload zone -->
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-placeholder" id="uploadPlaceholder">
+          <i data-lucide="image-plus" class="upload-icon-lucide"></i>
+          <p class="upload-title">Drop an image here</p>
+          <p class="upload-sub">or <button class="link-btn" id="browseBtn">browse files</button></p>
+          <p class="upload-hint">JPEG · PNG · WEBP · HEIC</p>
+          <p class="upload-hint bulk-hint" id="bulkHint" style="display:none">Multiple files accepted in bulk mode</p>
+        </div>
+
+        <div class="crop-wrapper" id="cropWrapper" style="display:none">
+          <img id="cropImage" alt="Image to crop" />
+        </div>
+
+        <input type="file" id="fileInput" accept="image/*" style="display:none" />
+        <input type="file" id="fileInputBulk" accept="image/*" multiple style="display:none" />
+      </div>
+
+      <!-- Single mode: crop controls -->
+      <div class="crop-controls" id="cropControls" style="display:none">
+        <div class="control-row">
+          <span class="control-label">Ratio</span>
+          <div class="btn-group" id="ratioGroup">
+            <button class="btn-ratio active" data-ratio="1.7778" data-tooltip="Landscape 16:9">16:9</button>
+            <button class="btn-ratio" data-ratio="0.5625" data-tooltip="Portrait 9:16">9:16</button>
+            <button class="btn-ratio" data-ratio="1.3333" data-tooltip="Standard 4:3">4:3</button>
+            <button class="btn-ratio" data-ratio="1" data-tooltip="Square 1:1">1:1</button>
+            <button class="btn-ratio" data-ratio="NaN" data-tooltip="Freeform — drag any shape">Free</button>
+          </div>
+        </div>
+        <div class="control-row">
+          <span class="control-label">Tools</span>
+          <div class="btn-group">
+            <button class="btn-tool" id="rotateLeft" data-tooltip="Rotate 90° left"><i data-lucide="rotate-ccw"></i></button>
+            <button class="btn-tool" id="rotateRight" data-tooltip="Rotate 90° right"><i data-lucide="rotate-cw"></i></button>
+            <button class="btn-tool" id="flipH" data-tooltip="Flip horizontal"><i data-lucide="flip-horizontal-2"></i></button>
+            <button class="btn-tool" id="flipV" data-tooltip="Flip vertical"><i data-lucide="flip-vertical-2"></i></button>
+            <button class="btn-tool" id="resetCrop" data-tooltip="Reset rotation, flip &amp; crop"><i data-lucide="undo-2"></i></button>
+            <button class="btn-tool" id="changeImage" data-tooltip="Load a different image"><i data-lucide="folder-open"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bulk mode: queue -->
+      <div class="bulk-queue" id="bulkQueue" style="display:none">
+        <div class="bulk-queue-header">
+          <span class="bulk-queue-count" id="bulkCount">0 images</span>
+          <div class="btn-group">
+            <button class="btn-tool" id="addMoreBtn" data-tooltip="Add more images"><i data-lucide="plus"></i></button>
+            <button class="btn-tool" id="clearQueueBtn" data-tooltip="Clear all"><i data-lucide="trash-2"></i></button>
+          </div>
+        </div>
+        <div class="bulk-items" id="bulkItems"></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: connection + tabs -->
+    <section class="panel panel--right">
+
+      <!-- TV Connection (always visible) -->
+      <div class="card" id="cardConnect">
+        <div class="card-header">
+          <i data-lucide="monitor"></i>
+          TV Connection
+        </div>
+        <div class="card-body">
+          <label class="field-label" for="tvIp">TV IP Address</label>
+          <div class="input-row">
+            <input class="input" id="tvIp" type="text" placeholder="192.168.1.XXX" spellcheck="false" autocomplete="off" />
+            <button class="btn-primary" id="connectBtn">Connect</button>
+          </div>
+          <p class="field-hint">Settings → General → Network → Network Status</p>
+          <div class="status-chip" id="statusChip" style="display:none">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText"></span>
+          </div>
+          <div class="alert alert--info" style="margin-top:10px;display:none" id="pairingAlert">
+            <strong>First-time pairing:</strong> Accept the connection request that appears on your TV screen.
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="tabs" role="tablist" id="mainTabs">
+        <button role="tab" class="tab-trigger active" data-tab="upload">
+          <i data-lucide="upload"></i> Upload
+        </button>
+        <button role="tab" class="tab-trigger" data-tab="artmode">
+          <i data-lucide="frame"></i> Art Mode
+        </button>
+      </div>
+
+      <!-- ── Upload Tab ── -->
+      <div class="tab-content" id="panel-upload">
+
+        <div class="card" id="cardUpload" style="display:none">
+          <div class="card-header">
+            <i data-lucide="send"></i>
+            <span id="uploadCardTitle">Send to TV</span>
+          </div>
+          <div class="card-body">
+            <label class="field-label">Matte Style</label>
+            <select class="select" id="matteSelect">
+              <option value="none">None (full bleed)</option>
+              <option value="flexible_black">Flexible Black</option>
+              <option value="modern_white_01">Modern White</option>
+              <option value="modern_dark_01">Modern Dark</option>
+              <option value="museum_dark_01">Museum Dark</option>
+              <option value="natural_wood_01">Natural Wood</option>
+            </select>
+
+            <label class="field-label" style="margin-top:14px">Resolution</label>
+            <select class="select" id="resolutionSelect">
+              <option value="3840,2160">4K — 3840 × 2160 (recommended)</option>
+              <option value="1920,1080">FHD — 1920 × 1080</option>
+            </select>
+
+            <div class="checkbox-row">
+              <input type="checkbox" id="showAfter" checked />
+              <label for="showAfter">Display on TV immediately after upload</label>
+            </div>
+
+            <!-- Single mode button -->
+            <button class="btn-send" id="uploadBtn" style="display:none">
+              <i data-lucide="upload"></i>
+              Send to Frame TV
+            </button>
+
+            <!-- Bulk mode button -->
+            <button class="btn-send" id="uploadBulkBtn" style="display:none">
+              <i data-lucide="layers"></i>
+              <span id="uploadBulkLabel">Upload All to Frame TV</span>
+            </button>
+
+            <!-- Progress -->
+            <div class="progress-wrap" id="progressWrap" style="display:none">
+              <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+              <span class="progress-label" id="progressLabel">Preparing image…</span>
+            </div>
+
+            <!-- Result -->
+            <div class="result-msg success" id="resultSuccess" style="display:none">
+              <i data-lucide="check-circle"></i>
+              <span id="resultSuccessText"></span>
+            </div>
+            <div class="result-msg error" id="resultError" style="display:none">
+              <i data-lucide="alert-circle"></i>
+              <span id="resultErrorText"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- My Artworks -->
+        <div class="card" id="cardArtworks" style="display:none">
+          <div class="card-header">
+            <i data-lucide="layout-grid"></i>
+            My Artworks on TV
+            <button class="btn-icon" id="refreshArtworks" data-tooltip="Refresh list">
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
+          <div class="card-body">
+            <div class="artworks-grid" id="artworksGrid">
+              <span class="muted">Loading…</span>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /panel-upload -->
+
+      <!-- ── Art Mode Tab ── -->
+      <div class="tab-content" id="panel-artmode" style="display:none">
+
+        <!-- Not connected notice -->
+        <div class="card" id="amNotConnected">
+          <div class="card-body" style="text-align:center;padding:28px 16px;gap:10px">
+            <i data-lucide="wifi-off" style="width:32px;height:32px;color:var(--muted)"></i>
+            <p class="muted">Connect to your TV to manage Art Mode settings.</p>
+          </div>
+        </div>
+
+        <!-- Display settings -->
+        <div class="card" id="amDisplay" style="display:none">
+          <div class="card-header">
+            <i data-lucide="tv-2"></i>
+            Display
+          </div>
+          <div class="card-body">
+
+            <!-- Art Mode on/off -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Art Mode</span>
+                <span class="setting-desc">Show artwork when TV is idle</span>
+              </div>
+              <div class="setting-ctrl">
+                <div class="btn-group">
+                  <button class="btn-secondary btn-sm" id="artModeOn2">On</button>
+                  <button class="btn-secondary btn-sm" id="artModeOff2">Off</button>
+                </div>
+                <span class="artmode-badge" id="artModeBadge">—</span>
+              </div>
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <!-- Shuffle -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name"><i data-lucide="shuffle" class="setting-icon"></i> Shuffle</span>
+                <span class="setting-desc">Randomize artwork order</span>
+              </div>
+              <button role="switch" aria-checked="false" class="switch" id="shuffleSwitch"></button>
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <!-- Display time -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name"><i data-lucide="clock" class="setting-icon"></i> Display time</span>
+                <span class="setting-desc">How long each artwork is shown</span>
+              </div>
+              <select class="select select--sm" id="displayTimer">
+                <option value="1">1 min</option>
+                <option value="3" selected>3 min</option>
+                <option value="5">5 min</option>
+                <option value="10">10 min</option>
+                <option value="15">15 min</option>
+                <option value="30">30 min</option>
+                <option value="60">1 hr</option>
+                <option value="180">3 hrs</option>
+                <option value="720">12 hrs</option>
+                <option value="1440">Daily</option>
+              </select>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Appearance -->
+        <div class="card" id="amAppearance" style="display:none">
+          <div class="card-header">
+            <i data-lucide="palette"></i>
+            Appearance
+          </div>
+          <div class="card-body">
+
+            <!-- Brightness -->
+            <div class="setting-col">
+              <div class="setting-row" style="margin-bottom:6px">
+                <span class="setting-name"><i data-lucide="sun" class="setting-icon"></i> Brightness</span>
+                <span class="slider-val" id="brightnessVal">5</span>
+              </div>
+              <input type="range" class="slider" id="brightnessSlider" min="1" max="10" value="5" />
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <!-- Color temperature -->
+            <div class="setting-col">
+              <span class="setting-name" style="display:block;margin-bottom:10px">
+                <i data-lucide="thermometer" class="setting-icon"></i> Color Temperature
+              </span>
+              <div class="btn-group" id="colorTempGroup">
+                <button class="btn-ratio" data-colortemp="cool" data-tooltip="Cool white">Cool</button>
+                <button class="btn-ratio active" data-colortemp="natural" data-tooltip="Neutral">Natural</button>
+                <button class="btn-ratio" data-colortemp="warm1" data-tooltip="Warm">Warm</button>
+                <button class="btn-ratio" data-colortemp="warm2" data-tooltip="Extra warm">Warmer</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Fetch / Save actions -->
+        <div class="card" id="amActions" style="display:none">
+          <div class="card-body" style="flex-direction:row;gap:8px">
+            <button class="btn-secondary" style="flex:1" id="fetchSettings">
+              <i data-lucide="download"></i> Fetch from TV
+            </button>
+            <button class="btn-primary" style="flex:1" id="saveSettings">
+              <i data-lucide="save"></i> Save to TV
+            </button>
+          </div>
+          <div class="card-body" style="padding-top:0">
+            <div class="result-msg success" id="amSuccess" style="display:none">
+              <i data-lucide="check-circle"></i><span id="amSuccessText"></span>
+            </div>
+            <div class="result-msg error" id="amError" style="display:none">
+              <i data-lucide="alert-circle"></i><span id="amErrorText"></span>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /panel-artmode -->
+
+    </section>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

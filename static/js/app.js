@@ -55,6 +55,7 @@ const refreshArtworks = document.getElementById('refreshArtworks');
 const amNotConnected  = document.getElementById('amNotConnected');
 const amDisplay       = document.getElementById('amDisplay');
 const amAppearance    = document.getElementById('amAppearance');
+const amMotion        = document.getElementById('amMotion');
 const amActions       = document.getElementById('amActions');
 const artModeBadge    = document.getElementById('artModeBadge');
 const artModeOn2      = document.getElementById('artModeOn2');
@@ -63,7 +64,10 @@ const shuffleSwitch   = document.getElementById('shuffleSwitch');
 const displayTimer    = document.getElementById('displayTimer');
 const brightnessSlider= document.getElementById('brightnessSlider');
 const brightnessVal   = document.getElementById('brightnessVal');
+const brightnessSnsr  = document.getElementById('brightnessSensorSwitch');
 const colorTempGroup  = document.getElementById('colorTempGroup');
+const motionTimer     = document.getElementById('motionTimer');
+const motionSensGroup = document.getElementById('motionSensGroup');
 const fetchSettingsBtn= document.getElementById('fetchSettings');
 const saveSettingsBtn = document.getElementById('saveSettings');
 const amSuccess       = document.getElementById('amSuccess');
@@ -87,6 +91,55 @@ async function api(endpoint, method = 'GET', body = null) {
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(endpoint, opts);
   return res.json();
+}
+
+/* ── Matte helpers (dynamic list from TV) ── */
+function formatMatteName(id) {
+  // e.g. "modern_white_01" → "Modern White"
+  return id
+    .replace(/_\d+$/, '')          // strip trailing _01, _02, …
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function loadMattes() {
+  if (!tvIp) return;
+  try {
+    const data = await api(`/api/mattes?ip=${encodeURIComponent(tvIp)}`);
+    if (!data.success || !Array.isArray(data.mattes) || !data.mattes.length) return;
+
+    // Flatten: the TV may return [{matte_type, color:[...]}] or a flat list
+    const options = [{ value: 'none', label: 'None (full bleed)' }];
+    data.mattes.forEach(m => {
+      if (typeof m === 'string') {
+        options.push({ value: m, label: formatMatteName(m) });
+      } else if (m && typeof m === 'object') {
+        const type = m.matte_type || m.type || m.id || '';
+        const colors = Array.isArray(m.color) ? m.color : [];
+        if (colors.length) {
+          colors.forEach(c => {
+            const val = `${type}_${c}`;
+            options.push({ value: val, label: `${formatMatteName(type)} — ${formatMatteName(c)}` });
+          });
+        } else if (type) {
+          options.push({ value: type, label: formatMatteName(type) });
+        }
+      }
+    });
+
+    const prev = matteSelect.value;
+    matteSelect.innerHTML = '';
+    options.forEach(({ value, label }) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      matteSelect.appendChild(opt);
+    });
+    // Restore previous selection if still valid
+    if ([...matteSelect.options].some(o => o.value === prev)) matteSelect.value = prev;
+  } catch {
+    // Non-fatal — keep existing options
+  }
 }
 
 /* ── Ratio helper ── */
@@ -433,12 +486,14 @@ function setConnectedState(data) {
     amNotConnected.style.display = 'none';
     amDisplay.style.display = 'block';
     amAppearance.style.display = 'block';
+    amMotion.style.display = 'block';
     amActions.style.display = 'block';
     if (data.artmode) {
       artModeBadge.textContent = data.artmode === 'on' ? 'On' : 'Off';
       artModeBadge.className = 'artmode-badge artmode-badge--' + data.artmode;
     }
     loadArtworks();
+    loadMattes();
   }
 
   // Show correct send button based on current mode
@@ -499,6 +554,20 @@ colorTempGroup.addEventListener('click', (e) => {
   colorTemp = btn.dataset.colortemp;
 });
 
+/* Auto brightness sensor switch */
+brightnessSnsr.addEventListener('click', () => {
+  const on = brightnessSnsr.getAttribute('aria-checked') !== 'true';
+  brightnessSnsr.setAttribute('aria-checked', on ? 'true' : 'false');
+});
+
+/* Motion sensitivity */
+motionSensGroup.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-ratio');
+  if (!btn) return;
+  motionSensGroup.querySelectorAll('.btn-ratio').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+});
+
 /* Fetch settings from TV */
 fetchSettingsBtn.addEventListener('click', async () => {
   if (!tvConnected) { showToast('Connect to the TV first.', 'error'); return; }
@@ -533,6 +602,18 @@ fetchSettingsBtn.addEventListener('click', async () => {
       if (btn) btn.classList.add('active');
       colorTemp = s.color;
     }
+    if (s.motion_timer !== undefined) {
+      motionTimer.value = s.motion_timer;
+    }
+    if (s.motion_sensitivity !== undefined) {
+      motionSensGroup.querySelectorAll('.btn-ratio').forEach(b => b.classList.remove('active'));
+      const sensBtn = motionSensGroup.querySelector(`[data-sens="${s.motion_sensitivity}"]`);
+      if (sensBtn) sensBtn.classList.add('active');
+    }
+    if (s.brightness_sensor !== undefined) {
+      const on = s.brightness_sensor === true || s.brightness_sensor === 'true' || s.brightness_sensor === 'on';
+      brightnessSnsr.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
 
     amSuccessText.textContent = 'Settings loaded from TV.';
     amSuccess.style.display = 'flex';
@@ -554,10 +635,13 @@ saveSettingsBtn.addEventListener('click', async () => {
   saveSettingsBtn.disabled = true;
 
   const settings = {
-    brightness:    parseInt(brightnessSlider.value),
-    shuffle:       shuffleSwitch.getAttribute('aria-checked') === 'true',
-    display_timer: parseInt(displayTimer.value),
-    color:         colorTemp,
+    brightness:         parseInt(brightnessSlider.value),
+    shuffle:            shuffleSwitch.getAttribute('aria-checked') === 'true',
+    display_timer:      parseInt(displayTimer.value),
+    color:              colorTemp,
+    motion_timer:       motionTimer.value,
+    motion_sensitivity: motionSensGroup.querySelector('.btn-ratio.active')?.dataset?.sens ?? '2',
+    brightness_sensor:  brightnessSnsr.getAttribute('aria-checked') === 'true',
   };
 
   try {

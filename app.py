@@ -248,20 +248,58 @@ def get_artmode_settings():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/mattes', methods=['GET'])
+def get_mattes():
+    """Return the TV's supported matte types and colour variants.
+
+    Inspired by NickWaterton/samsung-tv-ws-api (LGPL-3.0), which exposed
+    get_matte_list() and demonstrated how to use it to build dynamic matte UIs.
+    See CREDITS.md for full attribution.
+    """
+    ip = request.args.get('ip', '').strip()
+    if not ip:
+        return jsonify({'success': False, 'error': 'IP required'})
+    try:
+        def do_get():
+            a = get_art(ip)
+            with a:
+                return a.get_matte_list()
+
+        result = with_retry(do_get)
+        return jsonify({'success': True, 'mattes': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/api/artmode/settings', methods=['POST'])
 def set_artmode_settings():
     data = request.get_json()
     ip = (data or {}).get('ip', '').strip()
-    settings = (data or {}).get('settings', {})
+    # Copy so we can pop motion/sensor fields without mutating the original
+    settings = dict((data or {}).get('settings', {}))
     if not ip:
         return jsonify({'success': False, 'error': 'IP required'})
     if not settings:
         return jsonify({'success': False, 'error': 'No settings provided'})
+
+    # These are sent via dedicated TV commands, not set_artmode_settings().
+    # API insight from NickWaterton/samsung-tv-ws-api — see CREDITS.md.
+    motion_timer      = settings.pop('motion_timer', None)
+    motion_sensitivity= settings.pop('motion_sensitivity', None)
+    brightness_sensor = settings.pop('brightness_sensor', None)
+
     try:
         def do_set():
             a = get_art(ip)
             with a:
-                a.set_artmode_settings(settings)
+                if settings:
+                    a.set_artmode_settings(settings)
+                if motion_timer is not None:
+                    a.set_motion_timer(str(motion_timer))
+                if motion_sensitivity is not None:
+                    a.set_motion_sensitivity(str(motion_sensitivity))
+                if brightness_sensor is not None:
+                    a.set_brightness_sensor_setting(brightness_sensor)
 
         with_retry(do_set)
         return jsonify({'success': True})

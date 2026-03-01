@@ -141,11 +141,6 @@
             <label class="field-label">Matte Style</label>
             <select class="select" id="matteSelect">
               <option value="none">None (full bleed)</option>
-              <option value="flexible_black">Flexible Black</option>
-              <option value="modern_white_01">Modern White</option>
-              <option value="modern_dark_01">Modern Dark</option>
-              <option value="museum_dark_01">Museum Dark</option>
-              <option value="natural_wood_01">Natural Wood</option>
             </select>
 
             <label class="field-label" style="margin-top:14px">Resolution</label>
@@ -306,6 +301,60 @@
                 <button class="btn-ratio active" data-colortemp="natural" data-tooltip="Neutral">Natural</button>
                 <button class="btn-ratio" data-colortemp="warm1" data-tooltip="Warm">Warm</button>
                 <button class="btn-ratio" data-colortemp="warm2" data-tooltip="Extra warm">Warmer</button>
+              </div>
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <!-- Auto brightness sensor -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name"><i data-lucide="zap" class="setting-icon"></i> Auto Brightness</span>
+                <span class="setting-desc">Adjust brightness based on room light</span>
+              </div>
+              <button role="switch" aria-checked="false" class="switch" id="brightnessSensorSwitch"></button>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Motion detection -->
+        <div class="card" id="amMotion" style="display:none">
+          <div class="card-header">
+            <i data-lucide="activity"></i>
+            Motion
+          </div>
+          <div class="card-body">
+
+            <!-- Motion timer -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name"><i data-lucide="eye-off" class="setting-icon"></i> Motion Timer</span>
+                <span class="setting-desc">Turn off art when no motion is detected</span>
+              </div>
+              <select class="select select--sm" id="motionTimer">
+                <option value="off">Off</option>
+                <option value="5">5 min</option>
+                <option value="15">15 min</option>
+                <option value="30">30 min</option>
+                <option value="60">1 hr</option>
+                <option value="120">2 hrs</option>
+                <option value="240">4 hrs</option>
+              </select>
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <!-- Motion sensitivity -->
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name"><i data-lucide="sliders" class="setting-icon"></i> Sensitivity</span>
+                <span class="setting-desc">How easily motion wakes the display</span>
+              </div>
+              <div class="btn-group" id="motionSensGroup">
+                <button class="btn-ratio active" data-sens="1" data-tooltip="Low sensitivity">Low</button>
+                <button class="btn-ratio" data-sens="2" data-tooltip="Medium sensitivity">Med</button>
+                <button class="btn-ratio" data-sens="3" data-tooltip="High sensitivity">High</button>
               </div>
             </div>
 

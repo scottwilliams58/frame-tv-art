@@ -1,5 +1,7 @@
 import os
 import base64
+import json
+import time
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
 from PIL import Image
@@ -23,19 +25,43 @@ TOKEN_FILE = os.path.join(BASE_DIR, 'samsung_tv_token.txt')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
-def get_tv(ip):
+def get_art(ip, timeout=10):
+    """Return a SamsungTVArt instance connected directly to the art-app endpoint.
+
+    Using SamsungTVArt directly (instead of SamsungTVWS.art()) avoids the
+    token-file conflict where the main remote-control WebSocket and the art-app
+    WebSocket overwrite each other's tokens on every request, causing the TV to
+    prompt for permission on every single call.
+    """
     try:
-        from samsungtvws import SamsungTVWS
+        from samsungtvws import SamsungTVArt
     except ImportError:
         raise RuntimeError(
             "samsungtvws is not installed. Run: pip install -r requirements.txt"
         )
-    return SamsungTVWS(
+    return SamsungTVArt(
         host=ip,
         port=8002,
         token_file=TOKEN_FILE,
         name='FrameArtApp',
+        timeout=timeout,
     )
+
+
+def with_retry(fn, retries=2, delay=1.5):
+    """Call fn(), retrying on TV connection/timeout errors (ms.channel.timeOut etc.)."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            err_str = str(e).lower()
+            retriable = any(kw in err_str for kw in ('timeout', 'connection', 'channel'))
+            if not retriable or attempt >= retries:
+                raise
+            time.sleep(delay)
+    raise last_exc  # unreachable, but satisfies type checkers
 
 
 @app.route('/')
@@ -51,16 +77,19 @@ def connect():
         return jsonify({'success': False, 'error': 'IP address is required'})
 
     try:
-        tv = get_tv(ip)
-        with tv:
-            art = tv.art()
-            supported = art.supported()
-            artmode = None
-            if supported:
-                try:
-                    artmode = art.get_artmode()
-                except Exception:
-                    artmode = 'unknown'
+        art = get_art(ip)
+        # supported() uses REST (HTTP) — no WebSocket needed, no permission prompt
+        supported = art.supported()
+        artmode = None
+        if supported:
+            def do_connect():
+                a = get_art(ip)
+                with a:
+                    return a.get_artmode()
+            try:
+                artmode = with_retry(do_connect)
+            except Exception:
+                artmode = 'unknown'
         return jsonify({'success': True, 'art_supported': supported, 'artmode': artmode})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -93,9 +122,20 @@ def upload():
     img.save(temp_path, 'JPEG', quality=95, optimize=True)
 
     try:
-        tv = get_tv(ip)
-        with tv:
-            content_id = tv.art().upload(temp_path, matte=matte, show=show_after)
+        def do_upload():
+            a = get_art(ip)
+            with a:
+                # samsungtvws >= 3.x removed the 'show' kwarg from upload().
+                # Upload first, then call select_image() to display it.
+                content_id = a.upload(temp_path, matte=matte)
+                if content_id and show_after:
+                    try:
+                        a.select_image(content_id, show=True)
+                    except Exception:
+                        pass  # display failure is non-fatal
+            return content_id
+
+        content_id = with_retry(do_upload)
         return jsonify({'success': True, 'content_id': content_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -110,9 +150,14 @@ def artworks():
     if not ip:
         return jsonify({'success': False, 'error': 'IP address is required'})
     try:
-        tv = get_tv(ip)
-        with tv:
-            items = tv.art().available('MY-C0002') or []
+        def do_list():
+            a = get_art(ip)
+            with a:
+                # Fetch all content; the library filters by category_id client-side.
+                # Passing no category avoids a TV-side filter that can cause timeouts.
+                return a.available() or []
+
+        items = with_retry(do_list)
         return jsonify({'success': True, 'artworks': items})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -126,9 +171,12 @@ def select():
     if not ip or not content_id:
         return jsonify({'success': False, 'error': 'IP and content_id are required'})
     try:
-        tv = get_tv(ip)
-        with tv:
-            tv.art().select_image(content_id, show=True)
+        def do_select():
+            a = get_art(ip)
+            with a:
+                a.select_image(content_id, show=True)
+
+        with_retry(do_select)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -142,9 +190,12 @@ def artmode():
     if not ip:
         return jsonify({'success': False, 'error': 'IP address is required'})
     try:
-        tv = get_tv(ip)
-        with tv:
-            tv.art().set_artmode(mode)
+        def do_set():
+            a = get_art(ip)
+            with a:
+                a.set_artmode(mode)
+
+        with_retry(do_set)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -156,15 +207,42 @@ def get_artmode_settings():
     if not ip:
         return jsonify({'success': False, 'error': 'IP required'})
     try:
-        tv = get_tv(ip)
-        with tv:
-            raw = tv.art().get_artmode_settings()
-        if isinstance(raw, list):
-            settings = {item['item']: item.get('value') for item in raw if isinstance(item, dict) and 'item' in item}
-        elif isinstance(raw, dict):
-            settings = raw
-        else:
-            settings = {}
+        def do_get():
+            a = get_art(ip)
+            with a:
+                return a.get_artmode_settings()
+
+        raw = with_retry(do_get)
+
+        # Normalise the response: the TV may return a dict with a JSON-encoded
+        # 'data' list, a plain list, or a flat dict.
+        settings = {}
+        if isinstance(raw, dict):
+            data_field = raw.get('data')
+            if isinstance(data_field, str):
+                try:
+                    data_list = json.loads(data_field)
+                    if isinstance(data_list, list):
+                        settings = {
+                            item['item']: item.get('value')
+                            for item in data_list
+                            if isinstance(item, dict) and 'item' in item
+                        }
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            if not settings:
+                # Fall back to returning the raw dict minus protocol fields
+                settings = {
+                    k: v for k, v in raw.items()
+                    if k not in ('event', 'request_id', 'id', 'data')
+                }
+        elif isinstance(raw, list):
+            settings = {
+                item['item']: item.get('value')
+                for item in raw
+                if isinstance(item, dict) and 'item' in item
+            }
+
         return jsonify({'success': True, 'settings': settings})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -180,9 +258,12 @@ def set_artmode_settings():
     if not settings:
         return jsonify({'success': False, 'error': 'No settings provided'})
     try:
-        tv = get_tv(ip)
-        with tv:
-            tv.art().set_artmode_settings(settings)
+        def do_set():
+            a = get_art(ip)
+            with a:
+                a.set_artmode_settings(settings)
+
+        with_retry(do_set)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

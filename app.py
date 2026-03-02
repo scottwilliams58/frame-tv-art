@@ -5,6 +5,7 @@ import json
 import time
 import ipaddress
 import logging
+import threading
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
 from PIL import Image
@@ -103,49 +104,99 @@ def _err(msg: str, exc=None) -> dict:
     return {'success': False, 'error': msg}
 
 
-# ── Samsung TV helpers ────────────────────────────────────────────────────────
+# ── Persistent TV connection manager ─────────────────────────────────────────
+#
+# Samsung Frame TVs show a pairing dialog every time a NEW WebSocket connection
+# is opened to the art-app channel (com.samsung.art-app).  The previous pattern
+# of creating a fresh SamsungTVArt + open() + close() per Flask request caused
+# 3-6 dialogs per "Connect" click (connect + loadArtworks + loadMattes each
+# opened their own connection, and with_retry multiplied that by up to 3×).
+#
+# Fix: one persistent SamsungTVArt connection per TV IP, opened once and reused
+# across all routes.  A threading.Lock serialises concurrent Flask requests so
+# only one operation runs at a time per TV (preventing simultaneous reconnects).
+#
+# The connection is opened lazily on first use and kept alive.  If a call fails
+# with a retriable error the connection is dropped and re-opened once.
 
-def get_art(ip, timeout=10):
-    """Return a SamsungTVArt instance connected directly to the art-app endpoint.
-
-    Using SamsungTVArt directly (instead of SamsungTVWS.art()) avoids the
-    token-file conflict where the main remote-control WebSocket and the art-app
-    WebSocket overwrite each other's tokens on every request, causing the TV to
-    prompt for permission on every single call.
-    """
-    try:
-        from samsungtvws import SamsungTVArt
-    except ImportError:
-        raise RuntimeError(
-            "samsungtvws is not installed. Run: pip install -r requirements.txt"
-        )
-    art = SamsungTVArt(
-        host=ip,
-        port=8002,
-        token_file=TOKEN_FILE,
-        name='FrameArtApp',
-        timeout=timeout,
-    )
-    # Restrict token file permissions so only the owner can read it
-    if os.path.exists(TOKEN_FILE):
-        os.chmod(TOKEN_FILE, 0o600)
-    return art
+# Long enough for the user to see and accept the TV's pairing dialog.
+# Also used as the D2D socket timeout during image upload.
+_CONNECT_TIMEOUT = 90
 
 
-def with_retry(fn, retries=2, delay=1.5):
-    """Call fn(), retrying on TV connection/timeout errors (ms.channel.timeOut etc.)."""
-    last_exc = None
-    for attempt in range(retries + 1):
+class TVConnection:
+    """Manages a single persistent WebSocket connection to a Samsung Frame TV."""
+
+    def __init__(self):
+        self._art = None
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    def execute(self, ip: str, fn):
+        """Run fn(art) using the live connection, reconnecting once on failure."""
+        with self._lock:
+            for attempt in range(2):
+                if self._art is None or not self._art.is_alive():
+                    self._connect(ip)          # may block up to _CONNECT_TIMEOUT
+                try:
+                    return fn(self._art)
+                except Exception as e:
+                    logger.warning('TV call failed (attempt %d): %s', attempt + 1, e)
+                    self._close_art()
+                    err_str = str(e).lower()
+                    retriable = any(
+                        kw in err_str
+                        for kw in ('timeout', 'connection', 'channel', 'broken', 'pipe')
+                    )
+                    if attempt == 0 and retriable:
+                        time.sleep(1.5)
+                        continue
+                    raise
+
+    # ------------------------------------------------------------------
+    def _connect(self, ip: str):
+        """Open a new WebSocket to the TV (caller must hold self._lock)."""
         try:
-            return fn()
-        except Exception as e:
-            last_exc = e
-            err_str = str(e).lower()
-            retriable = any(kw in err_str for kw in ('timeout', 'connection', 'channel'))
-            if not retriable or attempt >= retries:
-                raise
-            time.sleep(delay)
-    raise last_exc  # unreachable, but satisfies type checkers
+            from samsungtvws import SamsungTVArt
+        except ImportError:
+            raise RuntimeError(
+                "samsungtvws is not installed. Run: pip install -r requirements.txt"
+            )
+        self._close_art()   # tear down any stale socket first
+        logger.info('Opening TV connection to %s (timeout=%ds)', ip, _CONNECT_TIMEOUT)
+        art = SamsungTVArt(
+            host=ip,
+            port=8002,
+            token_file=TOKEN_FILE,
+            name='FrameArtApp',
+            timeout=_CONNECT_TIMEOUT,
+        )
+        art.open()          # blocks until MS_CHANNEL_READY_EVENT (or timeout)
+        if os.path.exists(TOKEN_FILE):
+            os.chmod(TOKEN_FILE, 0o600)
+        self._art = art
+        logger.info('TV connection established to %s', ip)
+
+    def _close_art(self):
+        """Close the WebSocket. Caller must hold self._lock."""
+        if self._art is not None:
+            try:
+                self._art.close()
+            except Exception:
+                pass
+            self._art = None
+
+
+# One TVConnection per IP — created on first use, reused thereafter.
+_tv_conns: dict = {}
+_tv_conns_lock = threading.Lock()
+
+
+def get_tv_conn(ip: str) -> TVConnection:
+    with _tv_conns_lock:
+        if ip not in _tv_conns:
+            _tv_conns[ip] = TVConnection()
+        return _tv_conns[ip]
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -165,21 +216,23 @@ def connect():
         return jsonify(_err('Invalid IP address'))
 
     try:
-        art = get_art(ip)
-        # supported() uses REST (HTTP) — no WebSocket needed, no permission prompt
-        supported = art.supported()
+        from samsungtvws import SamsungTVArt
+    except ImportError:
+        return jsonify(_err('samsungtvws is not installed'))
+
+    try:
+        # supported() uses REST (HTTP) — no WebSocket, no pairing prompt.
+        art_check = SamsungTVArt(host=ip, port=8002, token_file=TOKEN_FILE,
+                                 name='FrameArtApp', timeout=10)
+        supported = art_check.supported()
+
         artmode = None
         if supported:
-            # Use a long timeout (30 s) so the user has enough time to accept
-            # the TV's pairing dialog without triggering a retry.  Do NOT wrap
-            # in with_retry here: each retry opens a fresh WebSocket and causes
-            # the TV to show the pairing prompt again, resulting in 3 dialogs.
-            try:
-                a = get_art(ip, timeout=30)
-                with a:
-                    artmode = a.get_artmode()
-            except Exception:
-                artmode = 'unknown'
+            # Open the persistent connection.  The user may see the TV's pairing
+            # dialog here — but only once, because subsequent calls reuse this
+            # connection rather than opening a new one.
+            artmode = get_tv_conn(ip).execute(ip, lambda a: a.get_artmode())
+
         return jsonify({'success': True, 'art_supported': supported, 'artmode': artmode})
     except Exception as e:
         return jsonify(_err('Could not connect to TV', e))
@@ -209,9 +262,6 @@ def upload():
     try:
         raw = base64.b64decode(image_b64)
         img = Image.open(BytesIO(raw))
-        if img.format not in ('JPEG', 'PNG', 'WEBP', 'MPO'):
-            # Convert HEIC / other formats silently; reject truly unrecognised ones
-            pass  # PIL will raise if it can't handle it
         img = img.convert('RGB')
     except Image.DecompressionBombError as e:
         return jsonify(_err('Image is too large to process safely', e))
@@ -222,22 +272,18 @@ def upload():
     img.save(temp_path, 'JPEG', quality=95, optimize=True)
 
     try:
-        def do_upload():
-            # Uploads transfer the full JPEG over WebSocket and can take 20–40 s;
-            # use a generous timeout so the transfer isn't cut off mid-stream.
-            a = get_art(ip, timeout=90)
-            with a:
-                # samsungtvws >= 3.x removed the 'show' kwarg from upload().
-                # Upload first, then call select_image() to display it.
-                content_id = a.upload(temp_path, matte=matte)
-                if content_id and show_after:
-                    try:
-                        a.select_image(content_id, show=True)
-                    except Exception:
-                        pass  # display failure is non-fatal
+        def do_upload(a):
+            # upload() transfers the full JPEG over a D2D socket; _CONNECT_TIMEOUT
+            # (90 s) is also used as the D2D socket timeout, so large files are fine.
+            content_id = a.upload(temp_path, matte=matte)
+            if content_id and show_after:
+                try:
+                    a.select_image(content_id, show=True)
+                except Exception:
+                    pass  # display failure is non-fatal
             return content_id
 
-        content_id = with_retry(do_upload)
+        content_id = get_tv_conn(ip).execute(ip, do_upload)
         return jsonify({'success': True, 'content_id': content_id})
     except Exception as e:
         return jsonify(_err('Upload to TV failed', e))
@@ -254,14 +300,7 @@ def artworks():
     if not validate_ip(ip):
         return jsonify(_err('Invalid IP address'))
     try:
-        def do_list():
-            a = get_art(ip, timeout=30)
-            with a:
-                # Fetch all content; the library filters by category_id client-side.
-                # Passing no category avoids a TV-side filter that can cause timeouts.
-                return a.available() or []
-
-        items = with_retry(do_list)
+        items = get_tv_conn(ip).execute(ip, lambda a: a.available() or [])
         return jsonify({'success': True, 'artworks': items})
     except Exception as e:
         return jsonify(_err('Could not fetch artwork list', e))
@@ -279,12 +318,7 @@ def select():
     if not validate_content_id(content_id):
         return jsonify(_err('Invalid content ID'))
     try:
-        def do_select():
-            a = get_art(ip, timeout=20)
-            with a:
-                a.select_image(content_id, show=True)
-
-        with_retry(do_select)
+        get_tv_conn(ip).execute(ip, lambda a: a.select_image(content_id, show=True))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify(_err('Could not select artwork', e))
@@ -302,12 +336,7 @@ def artmode():
     if mode not in _VALID_ARTMODE_MODES:
         return jsonify(_err('mode must be "on" or "off"'))
     try:
-        def do_set():
-            a = get_art(ip, timeout=20)
-            with a:
-                a.set_artmode(mode)
-
-        with_retry(do_set)
+        get_tv_conn(ip).execute(ip, lambda a: a.set_artmode(mode))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify(_err('Could not change Art Mode', e))
@@ -321,12 +350,7 @@ def get_artmode_settings():
     if not validate_ip(ip):
         return jsonify(_err('Invalid IP address'))
     try:
-        def do_get():
-            a = get_art(ip, timeout=20)
-            with a:
-                return a.get_artmode_settings()
-
-        raw = with_retry(do_get)
+        raw = get_tv_conn(ip).execute(ip, lambda a: a.get_artmode_settings())
 
         # Normalise the response: the TV may return a dict with a JSON-encoded
         # 'data' list, a plain list, or a flat dict.
@@ -376,12 +400,7 @@ def get_mattes():
     if not validate_ip(ip):
         return jsonify(_err('Invalid IP address'))
     try:
-        def do_get():
-            a = get_art(ip, timeout=20)
-            with a:
-                return a.get_matte_list()
-
-        result = with_retry(do_get)
+        result = get_tv_conn(ip).execute(ip, lambda a: a.get_matte_list())
         return jsonify({'success': True, 'mattes': result})
     except Exception as e:
         return jsonify(_err('Could not fetch matte list', e))
@@ -411,19 +430,17 @@ def set_artmode_settings():
     brightness_sensor  = settings.pop('brightness_sensor', None)
 
     try:
-        def do_set():
-            a = get_art(ip, timeout=20)
-            with a:
-                if settings:
-                    a.set_artmode_settings(settings)
-                if motion_timer is not None:
-                    a.set_motion_timer(str(motion_timer))
-                if motion_sensitivity is not None:
-                    a.set_motion_sensitivity(str(motion_sensitivity))
-                if brightness_sensor is not None:
-                    a.set_brightness_sensor_setting(brightness_sensor)
+        def do_set(a):
+            if settings:
+                a.set_artmode_settings(settings)
+            if motion_timer is not None:
+                a.set_motion_timer(str(motion_timer))
+            if motion_sensitivity is not None:
+                a.set_motion_sensitivity(str(motion_sensitivity))
+            if brightness_sensor is not None:
+                a.set_brightness_sensor_setting(brightness_sensor)
 
-        with_retry(do_set)
+        get_tv_conn(ip).execute(ip, do_set)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify(_err('Could not save Art Mode settings', e))

@@ -20,13 +20,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── PIL decompression-bomb protection ────────────────────────────────────────
-# Allow up to ~10 000 × 10 000 (100 MP).  Anything larger is almost certainly
-# a decompression-bomb; PIL will raise DecompressionBombError automatically.
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Keep Flask's instance folder out of world-readable /tmp
+# Keep Flask's instance folder (and the TV token) out of world-readable /tmp
 _instance_path = os.path.expanduser('~/.cache/frame-tv-art')
 os.makedirs(_instance_path, mode=0o700, exist_ok=True)
 
@@ -39,16 +37,33 @@ app = Flask(
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-TOKEN_FILE = os.path.join(BASE_DIR, 'samsung_tv_token.txt')
+
+# Bug #10 fix: store the token in the secure instance directory, not next to
+# app.py where it could end up in a world-readable location or a git repo.
+TOKEN_FILE = os.path.join(_instance_path, 'samsung_tv_token.txt')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+# ── Custom error handlers (return JSON, not HTML) ─────────────────────────────
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({'success': False, 'error': 'Image file too large (max 100 MB)'}), 413
+
 
 # ── Input validation helpers ──────────────────────────────────────────────────
 
 def validate_ip(ip_str: str) -> bool:
-    """Accept only well-formed IPv4 or IPv6 addresses (no hostnames / SSRF)."""
+    """Accept only routable IPv4/IPv6 addresses — no hostnames, loopback, or SSRF.
+
+    Bug #11 fix: ipaddress.ip_address() previously accepted ::1 (IPv6 loopback)
+    and link-local addresses.  We now explicitly reject those.
+    """
     try:
-        ipaddress.ip_address(ip_str)
+        addr = ipaddress.ip_address(ip_str)
+        if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            return False
         return True
     except ValueError:
         return False
@@ -65,10 +80,12 @@ def validate_content_id(cid: str) -> bool:
     return bool(cid) and bool(_SAFE_ID_RE.match(cid))
 
 
-_VALID_MOTION_TIMERS    = {'off', '5', '15', '30', '60', '120', '240'}
-_VALID_MOTION_SENS      = {'1', '2', '3'}
-_VALID_COLOR_TEMPS      = {'cool', 'natural', 'warm1', 'warm2'}
-_VALID_ARTMODE_MODES    = {'on', 'off'}
+_VALID_MOTION_TIMERS  = {'off', '5', '15', '30', '60', '120', '240'}
+_VALID_MOTION_SENS    = {'1', '2', '3'}
+_VALID_COLOR_TEMPS    = {'cool', 'natural', 'warm1', 'warm2'}
+_VALID_ARTMODE_MODES  = {'on', 'off'}
+# Bug #12 fix: allowlist matching the HTML <select> options.
+_VALID_DISPLAY_TIMERS = {'1', '3', '5', '10', '15', '30', '60', '180', '720', '1440'}
 
 def validate_artmode_settings(s: dict) -> list:
     """Return a list of validation error strings (empty = all good)."""
@@ -80,11 +97,10 @@ def validate_artmode_settings(s: dict) -> list:
                 errors.append('brightness must be 1–10')
         except (TypeError, ValueError):
             errors.append('brightness must be an integer')
-    if 'display_timer' in s:
-        try:
-            int(s['display_timer'])
-        except (TypeError, ValueError):
-            errors.append('display_timer must be an integer')
+    # Bug #12 fix: was int()-only check with no range/allowlist.
+    if 'display_timer' in s and str(s['display_timer']) not in _VALID_DISPLAY_TIMERS:
+        valid = ', '.join(sorted(_VALID_DISPLAY_TIMERS, key=int))
+        errors.append(f'display_timer must be one of: {valid}')
     if 'color' in s and s['color'] not in _VALID_COLOR_TEMPS:
         errors.append(f"color must be one of {sorted(_VALID_COLOR_TEMPS)}")
     if 'shuffle' in s and not isinstance(s['shuffle'], bool):
@@ -108,21 +124,14 @@ def _err(msg: str, exc=None) -> dict:
 # ── Persistent TV connection manager ─────────────────────────────────────────
 #
 # Samsung Frame TVs show a pairing dialog every time a NEW WebSocket connection
-# is opened to the art-app channel (com.samsung.art-app).  The previous pattern
-# of creating a fresh SamsungTVArt + open() + close() per Flask request caused
-# 3-6 dialogs per "Connect" click (connect + loadArtworks + loadMattes each
-# opened their own connection, and with_retry multiplied that by up to 3×).
-#
-# Fix: one persistent SamsungTVArt connection per TV IP, opened once and reused
-# across all routes.  A threading.Lock serialises concurrent Flask requests so
-# only one operation runs at a time per TV (preventing simultaneous reconnects).
-#
-# The connection is opened lazily on first use and kept alive.  If a call fails
-# with a retriable error the connection is dropped and re-opened once.
+# is opened to the art-app channel.  We keep one persistent SamsungTVArt per
+# IP, opened once and reused across all routes.
 
-# Long enough for the user to see and accept the TV's pairing dialog.
-# Also used as the D2D socket timeout during image upload.
+# 90 s covers both the pairing-dialog wait and the D2D image-transfer socket.
 _CONNECT_TIMEOUT = 90
+# Reduced socket timeout for normal API commands after the connection is
+# established.  Bug #5 fix: previously all ops used the full 90 s timeout.
+_OP_TIMEOUT = 20
 
 
 class TVConnection:
@@ -134,12 +143,18 @@ class TVConnection:
 
     # ------------------------------------------------------------------
     def execute(self, ip: str, fn):
-        """Run fn(art) using the live connection, reconnecting once on failure."""
+        """Run fn(art) using the live connection, reconnecting once on failure.
+
+        Bug #1 fix: _connect() was previously called OUTSIDE the try/except,
+        so connection-phase failures (TV refuses handshake, pairing timeout)
+        bypassed the retry loop entirely.  Moving it inside the try block means
+        both connection failures and fn() failures are handled uniformly.
+        """
         with self._lock:
             for attempt in range(2):
-                if self._art is None or not self._art.is_alive():
-                    self._connect(ip)          # may block up to _CONNECT_TIMEOUT
                 try:
+                    if self._art is None or not self._art.is_alive():
+                        self._connect(ip)
                     return fn(self._art)
                 except Exception as e:
                     logger.warning('TV call failed (attempt %d): %s', attempt + 1, e)
@@ -163,7 +178,7 @@ class TVConnection:
             raise RuntimeError(
                 "samsungtvws is not installed. Run: pip install -r requirements.txt"
             )
-        self._close_art()   # tear down any stale socket first
+        self._close_art()
         logger.info('Opening TV connection to %s (timeout=%ds)', ip, _CONNECT_TIMEOUT)
         art = SamsungTVArt(
             host=ip,
@@ -172,7 +187,18 @@ class TVConnection:
             name='FrameArtApp',
             timeout=_CONNECT_TIMEOUT,
         )
-        art.open()          # blocks until MS_CHANNEL_READY_EVENT (or timeout)
+        art.open()   # blocks until MS_CHANNEL_READY_EVENT (or timeout / pairing dialog)
+
+        # Bug #5 fix: reduce the WebSocket socket timeout now that the connection
+        # is established.  _CONNECT_TIMEOUT (90 s) was needed during open() for the
+        # pairing dialog; normal commands need far less.  Note: art.timeout (still
+        # 90 s) is separately used by the D2D upload socket, which we deliberately
+        # leave long for large image transfers.
+        try:
+            art.connection.settimeout(_OP_TIMEOUT)
+        except Exception:
+            pass  # non-critical; 90 s is still safe if this fails
+
         if os.path.exists(TOKEN_FILE):
             os.chmod(TOKEN_FILE, 0o600)
         self._art = art
@@ -201,6 +227,8 @@ def get_tv_conn(ip: str) -> TVConnection:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+# Bug #6 fix: all error responses previously returned HTTP 200.
+# Validation errors now return 400, TV communication failures return 502.
 
 @app.route('/')
 def index():
@@ -212,14 +240,14 @@ def connect():
     data = request.get_json()
     ip = (data or {}).get('ip', '').strip()
     if not ip:
-        return jsonify(_err('IP address is required'))
+        return jsonify(_err('IP address is required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
 
     try:
         from samsungtvws import SamsungTVArt
     except ImportError:
-        return jsonify(_err('samsungtvws is not installed'))
+        return jsonify(_err('samsungtvws is not installed')), 500
 
     try:
         # supported() uses REST (HTTP) — no WebSocket, no pairing prompt.
@@ -229,14 +257,27 @@ def connect():
 
         artmode = None
         if supported:
-            # Open the persistent connection.  The user may see the TV's pairing
-            # dialog here — but only once, because subsequent calls reuse this
-            # connection rather than opening a new one.
             artmode = get_tv_conn(ip).execute(ip, lambda a: a.get_artmode())
 
         return jsonify({'success': True, 'art_supported': supported, 'artmode': artmode})
+
     except Exception as e:
-        return jsonify(_err('Could not connect to TV', e))
+        # Bug #8 fix: distinguish pairing/auth failures so the client can show
+        # the right hint without relying on fragile regex matching of error text.
+        err_type = type(e).__name__.lower()
+        err_str  = str(e).lower()
+        is_pairing = (
+            'unauthorized' in err_type
+            or any(kw in err_str for kw in ('unauthorized', 'token', 'pair', 'denied'))
+        )
+        if is_pairing:
+            return jsonify({
+                'success': False,
+                'error':   'TV pairing required — check your TV screen.',
+                'pairing': True,
+            }), 401
+        logger.error('connect: %s', e)
+        return jsonify(_err('Could not connect to TV', e)), 502
 
 
 @app.route('/api/upload', methods=['POST'])
@@ -248,13 +289,13 @@ def upload():
     show_after= (data or {}).get('show', True)
 
     if not ip:
-        return jsonify(_err('TV IP address is required'))
+        return jsonify(_err('TV IP address is required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     if not image_b64:
-        return jsonify(_err('No image data provided'))
+        return jsonify(_err('No image data provided')), 400
     if not validate_matte_id(str(matte)):
-        return jsonify(_err('Invalid matte identifier'))
+        return jsonify(_err('Invalid matte identifier')), 400
 
     # Strip data URL prefix
     if ',' in image_b64:
@@ -265,9 +306,9 @@ def upload():
         img = Image.open(BytesIO(raw))
         img = img.convert('RGB')
     except Image.DecompressionBombError as e:
-        return jsonify(_err('Image is too large to process safely', e))
+        return jsonify(_err('Image is too large to process safely', e)), 400
     except Exception as e:
-        return jsonify(_err('Invalid image data', e))
+        return jsonify(_err('Invalid image data', e)), 400
 
     fd, temp_path = tempfile.mkstemp(suffix='.jpg', dir=UPLOAD_FOLDER)
     os.close(fd)
@@ -276,7 +317,7 @@ def upload():
 
         def do_upload(a):
             # upload() transfers the full JPEG over a D2D socket; _CONNECT_TIMEOUT
-            # (90 s) is also used as the D2D socket timeout, so large files are fine.
+            # (90 s) is used as the D2D socket timeout, so large files are fine.
             content_id = a.upload(temp_path, matte=matte)
             if content_id and show_after:
                 try:
@@ -288,7 +329,7 @@ def upload():
         content_id = get_tv_conn(ip).execute(ip, do_upload)
         return jsonify({'success': True, 'content_id': content_id})
     except Exception as e:
-        return jsonify(_err('Upload to TV failed', e))
+        return jsonify(_err('Upload to TV failed', e)), 502
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -298,14 +339,14 @@ def upload():
 def artworks():
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify(_err('IP address is required'))
+        return jsonify(_err('IP address is required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     try:
         items = get_tv_conn(ip).execute(ip, lambda a: a.available() or [])
         return jsonify({'success': True, 'artworks': items})
     except Exception as e:
-        return jsonify(_err('Could not fetch artwork list', e))
+        return jsonify(_err('Could not fetch artwork list', e)), 502
 
 
 @app.route('/api/select', methods=['POST'])
@@ -314,16 +355,16 @@ def select():
     ip         = (data or {}).get('ip', '').strip()
     content_id = (data or {}).get('content_id', '').strip()
     if not ip:
-        return jsonify(_err('IP address is required'))
+        return jsonify(_err('IP address is required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     if not validate_content_id(content_id):
-        return jsonify(_err('Invalid content ID'))
+        return jsonify(_err('Invalid content ID')), 400
     try:
         get_tv_conn(ip).execute(ip, lambda a: a.select_image(content_id, show=True))
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify(_err('Could not select artwork', e))
+        return jsonify(_err('Could not select artwork', e)), 502
 
 
 @app.route('/api/artmode', methods=['POST'])
@@ -332,25 +373,25 @@ def artmode():
     ip   = (data or {}).get('ip', '').strip()
     mode = (data or {}).get('mode', 'on')
     if not ip:
-        return jsonify(_err('IP address is required'))
+        return jsonify(_err('IP address is required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     if mode not in _VALID_ARTMODE_MODES:
-        return jsonify(_err('mode must be "on" or "off"'))
+        return jsonify(_err('mode must be "on" or "off"')), 400
     try:
         get_tv_conn(ip).execute(ip, lambda a: a.set_artmode(mode))
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify(_err('Could not change Art Mode', e))
+        return jsonify(_err('Could not change Art Mode', e)), 502
 
 
 @app.route('/api/artmode/settings', methods=['GET'])
 def get_artmode_settings():
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify(_err('IP required'))
+        return jsonify(_err('IP required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     try:
         raw = get_tv_conn(ip).execute(ip, lambda a: a.get_artmode_settings())
 
@@ -371,7 +412,6 @@ def get_artmode_settings():
                 except (json.JSONDecodeError, KeyError):
                     pass
             if not settings:
-                # Fall back to returning the raw dict minus protocol fields
                 settings = {
                     k: v for k, v in raw.items()
                     if k not in ('event', 'request_id', 'id', 'data')
@@ -385,27 +425,25 @@ def get_artmode_settings():
 
         return jsonify({'success': True, 'settings': settings})
     except Exception as e:
-        return jsonify(_err('Could not fetch Art Mode settings', e))
+        return jsonify(_err('Could not fetch Art Mode settings', e)), 502
 
 
 @app.route('/api/mattes', methods=['GET'])
 def get_mattes():
     """Return the TV's supported matte types and colour variants.
 
-    Inspired by NickWaterton/samsung-tv-ws-api (LGPL-3.0), which exposed
-    get_matte_list() and demonstrated how to use it to build dynamic matte UIs.
-    See CREDITS.md for full attribution.
+    Inspired by NickWaterton/samsung-tv-ws-api (LGPL-3.0).  See CREDITS.md.
     """
     ip = request.args.get('ip', '').strip()
     if not ip:
-        return jsonify(_err('IP required'))
+        return jsonify(_err('IP required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     try:
         result = get_tv_conn(ip).execute(ip, lambda a: a.get_matte_list())
         return jsonify({'success': True, 'mattes': result})
     except Exception as e:
-        return jsonify(_err('Could not fetch matte list', e))
+        return jsonify(_err('Could not fetch matte list', e)), 502
 
 
 @app.route('/api/artmode/settings', methods=['POST'])
@@ -415,15 +453,15 @@ def set_artmode_settings():
     # Copy so we can pop motion/sensor fields without mutating the original
     settings = dict((data or {}).get('settings', {}))
     if not ip:
-        return jsonify(_err('IP required'))
+        return jsonify(_err('IP required')), 400
     if not validate_ip(ip):
-        return jsonify(_err('Invalid IP address'))
+        return jsonify(_err('Invalid IP address')), 400
     if not settings:
-        return jsonify(_err('No settings provided'))
+        return jsonify(_err('No settings provided')), 400
 
     errors = validate_artmode_settings(settings)
     if errors:
-        return jsonify(_err('; '.join(errors)))
+        return jsonify(_err('; '.join(errors))), 400
 
     # These are sent via dedicated TV commands, not set_artmode_settings().
     # API insight from NickWaterton/samsung-tv-ws-api — see CREDITS.md.
@@ -445,7 +483,7 @@ def set_artmode_settings():
         get_tv_conn(ip).execute(ip, do_set)
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify(_err('Could not save Art Mode settings', e))
+        return jsonify(_err('Could not save Art Mode settings', e)), 502
 
 
 if __name__ == '__main__':

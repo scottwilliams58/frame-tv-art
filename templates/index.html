@@ -35,7 +35,7 @@
         <span class="section-label">Image &amp; Crop</span>
         <label class="bulk-toggle-label">
           <span class="bulk-toggle-text">Bulk mode</span>
-          <button role="switch" aria-checked="false" class="switch" id="bulkModeSwitch"></button>
+          <button role="switch" aria-checked="false" class="switch" id="bulkModeSwitch" aria-label="Toggle bulk upload mode"></button>
         </label>
       </div>
 
@@ -122,11 +122,12 @@
       </div>
 
       <!-- Tab bar -->
-      <div class="tabs" role="tablist" id="mainTabs">
-        <button role="tab" class="tab-trigger active" data-tab="upload">
+      <!-- Bug #15 fix: aria-label on tablist, aria-selected on each tab trigger -->
+      <div class="tabs" role="tablist" id="mainTabs" aria-label="Main navigation">
+        <button role="tab" class="tab-trigger active" data-tab="upload" aria-selected="true">
           <i data-lucide="upload"></i> Upload
         </button>
-        <button role="tab" class="tab-trigger" data-tab="artmode">
+        <button role="tab" class="tab-trigger" data-tab="artmode" aria-selected="false">
           <i data-lucide="frame"></i> Art Mode
         </button>
       </div>
@@ -246,7 +247,7 @@
                 <span class="setting-name"><i data-lucide="shuffle" class="setting-icon"></i> Shuffle</span>
                 <span class="setting-desc">Randomize artwork order</span>
               </div>
-              <button role="switch" aria-checked="false" class="switch" id="shuffleSwitch"></button>
+              <button role="switch" aria-checked="false" class="switch" id="shuffleSwitch" aria-label="Toggle shuffle"></button>
             </div>
 
             <div class="setting-divider"></div>
@@ -314,7 +315,7 @@
                 <span class="setting-name"><i data-lucide="zap" class="setting-icon"></i> Auto Brightness</span>
                 <span class="setting-desc">Adjust brightness based on room light</span>
               </div>
-              <button role="switch" aria-checked="false" class="switch" id="brightnessSensorSwitch"></button>
+              <button role="switch" aria-checked="false" class="switch" id="brightnessSensorSwitch" aria-label="Toggle auto brightness sensor"></button>
             </div>
 
           </div>

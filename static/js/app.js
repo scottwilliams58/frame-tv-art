@@ -3,6 +3,7 @@ let cropper = null;
 let tvConnected = false;
 let tvIp = '';
 let flipX = 1, flipY = 1;
+let _cropObjectUrl = null;   // Bug #7: track so we can revoke on image change
 let bulkMode = false;
 let bulkQueue = []; // [{file, thumbUrl, name, status}]
 let colorTemp = 'natural';
@@ -86,10 +87,22 @@ function showToast(msg, type = 'info') {
 }
 
 /* ── API helper ── */
+// Bug #4 fix: previously always sent Content-Type on GET requests, and called
+// res.json() unconditionally — which throws on Flask's HTML error pages (413,
+// 500).  Now: Content-Type only when sending a body; throw a readable error
+// when the response isn't JSON so callers show something meaningful.
+// Bug #16 fix: don't send Content-Type header on GET requests (no body).
 async function api(endpoint, method = 'GET', body = null) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body) opts.body = JSON.stringify(body);
+  const opts = { method };
+  if (body !== null) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
   const res = await fetch(endpoint, opts);
+  const ct = res.headers.get('Content-Type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error(`Server error (HTTP ${res.status})`);
+  }
   return res.json();
 }
 
@@ -219,7 +232,11 @@ uploadZone.addEventListener('drop', (e) => {
 
 /* ── Single mode: load & crop ── */
 function loadFile(file) {
-  cropImage.src = URL.createObjectURL(file);
+  // Bug #7 fix: revoke the previous object URL before creating a new one to
+  // avoid a URL leak on each image load.
+  if (_cropObjectUrl) { URL.revokeObjectURL(_cropObjectUrl); }
+  _cropObjectUrl = URL.createObjectURL(file);
+  cropImage.src = _cropObjectUrl;
   uploadPlaceholder.style.display = 'none';
   cropWrapper.style.display = 'block';
   uploadZone.style.cursor = 'default';
@@ -272,6 +289,8 @@ document.getElementById('resetCrop').addEventListener('click', () => {
 });
 document.getElementById('changeImage').addEventListener('click', () => {
   if (cropper) { cropper.destroy(); cropper = null; }
+  // Bug #7 fix: revoke the object URL when the user navigates away from the image.
+  if (_cropObjectUrl) { URL.revokeObjectURL(_cropObjectUrl); _cropObjectUrl = null; }
   cropWrapper.style.display = 'none';
   uploadPlaceholder.style.display = 'flex';
   cropControls.style.display = 'none';
@@ -301,31 +320,60 @@ function renderBulkQueue() {
     updateBulkLabel();
     return;
   }
+  // Bug #2 fix: was using el.innerHTML with item.name (a filesystem filename)
+  // and item.thumbUrl unsanitised, enabling XSS via a crafted filename.
+  // Now built entirely with DOM methods — textContent for all user-sourced strings.
   bulkQueue.forEach((item, i) => {
     const statusIcon = { pending: 'circle', uploading: 'loader', done: 'check-circle', error: 'alert-circle' }[item.status] || 'circle';
+
     const el = document.createElement('div');
     el.className = 'bulk-item';
-    el.innerHTML = `
-      <img class="bulk-thumb" src="${item.thumbUrl}" alt="" />
-      <div class="bulk-item-info">
-        <span class="bulk-item-name">${item.name}</span>
-        <span class="bulk-item-status bulk-item-status--${item.status}">
-          <i data-lucide="${statusIcon}"></i>
-          ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-        </span>
-      </div>
-      <button class="btn-icon bulk-item-remove" data-index="${i}" title="Remove">
-        <i data-lucide="x"></i>
-      </button>`;
+
+    // Thumbnail (src is a data: URL we generated — safe to set via attribute)
+    const img = document.createElement('img');
+    img.className = 'bulk-thumb';
+    img.src = item.thumbUrl;
+    img.alt = '';
+
+    // Name + status info
+    const info = document.createElement('div');
+    info.className = 'bulk-item-info';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'bulk-item-name';
+    nameSpan.textContent = item.name;   // textContent — safe for any filename
+
+    const statusSpan = document.createElement('span');
+    statusSpan.className = `bulk-item-status bulk-item-status--${item.status}`;
+    const statusIconEl = document.createElement('i');
+    statusIconEl.setAttribute('data-lucide', statusIcon);
+    const statusLabel = document.createElement('span');
+    statusLabel.textContent = item.status.charAt(0).toUpperCase() + item.status.slice(1);
+    statusSpan.appendChild(statusIconEl);
+    statusSpan.appendChild(statusLabel);
+
+    info.appendChild(nameSpan);
+    info.appendChild(statusSpan);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn-icon bulk-item-remove';
+    removeBtn.title = 'Remove';
+    removeBtn.setAttribute('aria-label', `Remove ${item.name}`);
+    const removeIcon = document.createElement('i');
+    removeIcon.setAttribute('data-lucide', 'x');
+    removeBtn.appendChild(removeIcon);
+    removeBtn.addEventListener('click', () => {
+      bulkQueue.splice(i, 1);
+      renderBulkQueue();
+    });
+
+    el.appendChild(img);
+    el.appendChild(info);
+    el.appendChild(removeBtn);
     bulkItemsEl.appendChild(el);
   });
   lucide.createIcons();
-  bulkItemsEl.querySelectorAll('.bulk-item-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      bulkQueue.splice(parseInt(btn.dataset.index), 1);
-      renderBulkQueue();
-    });
-  });
   updateBulkLabel();
 }
 
@@ -393,6 +441,14 @@ async function uploadBulk() {
   uploadBulkBtn.disabled = true;
   let successCount = 0;
 
+  // Bug #9 fix: previously compared loop index to bulkQueue.length - 1, which
+  // broke in two ways: (a) if the last item was already 'done' it was skipped
+  // so show was never true for any upload; (b) if the last item failed, nothing
+  // was displayed even though earlier items succeeded.
+  // Fix: compute the index of the last *pending* item before the loop starts.
+  const lastPendingIdx = bulkQueue.reduce(
+    (last, item, i) => item.status !== 'done' ? i : last, -1);
+
   for (let i = 0; i < bulkQueue.length; i++) {
     const item = bulkQueue[i];
     if (item.status === 'done') continue;
@@ -403,10 +459,11 @@ async function uploadBulk() {
     if (!dataURL) { item.status = 'error'; renderBulkQueue(); continue; }
 
     try {
-      // Only display the last successfully uploaded image if "show" is checked
+      // Only display on TV for the last pending item (not the last index of the
+      // full queue, which may have already-done items after it).
       const data = await api('/api/upload', 'POST', {
         ip: tvIp, image: dataURL, matte,
-        show: show && i === bulkQueue.length - 1,
+        show: show && i === lastPendingIdx,
       });
       item.status = data.success ? 'done' : 'error';
       if (data.success) successCount++;
@@ -427,9 +484,14 @@ async function uploadBulk() {
 document.getElementById('mainTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab-trigger');
   if (!btn) return;
-  document.querySelectorAll('.tab-trigger').forEach(b => b.classList.remove('active'));
+  // Bug #15 fix: sync aria-selected so screen readers announce which tab is active.
+  document.querySelectorAll('.tab-trigger').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-selected', 'false');
+  });
   document.querySelectorAll('.tab-content').forEach(p => p.style.display = 'none');
   btn.classList.add('active');
+  btn.setAttribute('aria-selected', 'true');
   const panel = document.getElementById('panel-' + btn.dataset.tab);
   if (panel) panel.style.display = 'flex';
   if (btn.dataset.tab === 'artmode' && !tvConnected) {
@@ -446,22 +508,26 @@ tvIpInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToT
 async function connectToTV() {
   const ip = tvIpInput.value.trim();
   if (!ip) { showToast('Enter the TV IP address first.', 'error'); return; }
-  tvIp = ip;
+  // Bug #13 fix: don't update tvIp until the connection succeeds — a failed
+  // reconnect attempt was leaving tvIp pointing at the new (unreachable) IP.
   setConnectingState();
 
   let data;
   try { data = await api('/api/connect', 'POST', { ip }); }
-  catch { setErrorState('Network error — is the app server running?'); return; }
+  catch (err) { setErrorState('Network error — is the app server running?'); return; }
 
   if (!data.success) {
-    const isFirst = /token|pair|connect|refused/i.test(data.error || '');
-    pairingAlert.style.display = isFirst ? 'block' : 'none';
-    setErrorState(isFirst ? 'Check your TV for a pairing dialog, then retry.' : (data.error || 'Connection failed'));
+    // Bug #8 fix: server now returns data.pairing = true for auth/pairing failures
+    // instead of relying on client-side regex that matched "connect" in generic errors.
+    pairingAlert.style.display = data.pairing ? 'block' : 'none';
+    setErrorState(data.pairing
+      ? 'Check your TV for a pairing dialog, then retry.'
+      : (data.error || 'Connection failed'));
     return;
   }
 
   pairingAlert.style.display = 'none';
-  setConnectedState(data);
+  setConnectedState(data, ip);
 }
 
 function setConnectingState() {
@@ -472,7 +538,8 @@ function setConnectingState() {
   statusText.textContent = 'Connecting…';
 }
 
-function setConnectedState(data) {
+function setConnectedState(data, ip) {
+  tvIp = ip;   // Bug #13 fix: only set tvIp on confirmed success
   tvConnected = true;
   connectBtn.disabled = false;
   connectBtn.textContent = 'Reconnect';
@@ -510,6 +577,17 @@ function setErrorState(msg) {
   statusDot.className = 'status-dot disconnected';
   statusText.textContent = msg;
   showToast(msg, 'error');
+  // Bug #14 fix: hide TV-dependent UI so the user knows they need to reconnect.
+  // Previously these cards stayed visible after a failed reconnect attempt.
+  cardUpload.style.display    = 'none';
+  cardArtworks.style.display  = 'none';
+  uploadBtn.style.display     = 'none';
+  uploadBulkBtn.style.display = 'none';
+  amNotConnected.style.display = 'block';
+  amDisplay.style.display     = 'none';
+  amAppearance.style.display  = 'none';
+  amMotion.style.display      = 'none';
+  amActions.style.display     = 'none';
 }
 
 /* ════════════════════════════════════════
@@ -736,7 +814,15 @@ async function loadArtworks() {
   artworksGrid.innerHTML = '<span class="muted">Loading…</span>';
   try {
     const data = await api(`/api/artworks?ip=${encodeURIComponent(tvIp)}`);
-    if (!data.success) { artworksGrid.innerHTML = `<span class="muted">${data.error}</span>`; return; }
+    if (!data.success) {
+      // Bug #3 fix: was injecting data.error into innerHTML — use textContent.
+      const errSpan = document.createElement('span');
+      errSpan.className = 'muted';
+      errSpan.textContent = data.error || 'Error loading artworks.';
+      artworksGrid.innerHTML = '';
+      artworksGrid.appendChild(errSpan);
+      return;
+    }
     const list = data.artworks || [];
     if (!list.length) { artworksGrid.innerHTML = '<span class="muted">No uploaded artworks found.</span>'; return; }
     artworksGrid.innerHTML = '';

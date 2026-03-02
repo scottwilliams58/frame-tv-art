@@ -6,6 +6,7 @@ import time
 import ipaddress
 import logging
 import threading
+import tempfile
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
 from PIL import Image
@@ -268,10 +269,11 @@ def upload():
     except Exception as e:
         return jsonify(_err('Invalid image data', e))
 
-    temp_path = os.path.join(UPLOAD_FOLDER, 'upload_temp.jpg')
-    img.save(temp_path, 'JPEG', quality=95, optimize=True)
-
+    fd, temp_path = tempfile.mkstemp(suffix='.jpg', dir=UPLOAD_FOLDER)
+    os.close(fd)
     try:
+        img.save(temp_path, 'JPEG', quality=95, optimize=True)
+
         def do_upload(a):
             # upload() transfers the full JPEG over a D2D socket; _CONNECT_TIMEOUT
             # (90 s) is also used as the D2D socket timeout, so large files are fine.

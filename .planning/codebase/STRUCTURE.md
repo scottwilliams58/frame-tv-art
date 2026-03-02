@@ -38,7 +38,7 @@ Runtime paths not in the repo tree:
 
 | File | Absolute Path | Role |
 |---|---|---|
-| Backend entry point | `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py` | Flask app, all routes, TV helpers, input validation |
+| Backend entry point | `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py` | Flask app, all routes, TVConnection manager, input validation |
 | HTML template | `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/templates/index.html` | Single-page UI shell; loaded once on `GET /` |
 | Frontend logic | `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/static/js/app.js` | All client-side state, API calls, Cropper.js integration |
 | Styles | `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/static/css/style.css` | Dark theme, component styles, responsive grid |
@@ -54,27 +54,41 @@ The single backend file is organised into named sections separated by `# ── 
 
 | Section | Lines | Contents |
 |---|---|---|
-| Imports & logging setup | 1–18 | stdlib + Flask + Pillow; `logging.basicConfig` |
-| PIL protection | 20–23 | `Image.MAX_IMAGE_PIXELS = 100_000_000` |
-| Flask app init | 25–42 | `BASE_DIR`, instance path, `MAX_CONTENT_LENGTH`, `UPLOAD_FOLDER`, `TOKEN_FILE` |
-| Input validation helpers | 44–96 | `validate_ip`, `validate_matte_id`, `validate_content_id`, `validate_artmode_settings`, `_err` |
-| Samsung TV helpers | 106–148 | `get_art()`, `with_retry()` |
-| Routes | 151–429 | Eight route functions (see below) |
-| `__main__` block | 432–439 | `PORT`, `FRAME_TV_HOST`, `FLASK_DEBUG` env vars; `app.run()` |
+| Imports & logging setup | 1–19 | stdlib + Flask + Pillow; `logging.basicConfig` |
+| PIL protection | 21–24 | `Image.MAX_IMAGE_PIXELS = 100_000_000` |
+| Flask app init | 26–43 | `BASE_DIR`, instance path, `MAX_CONTENT_LENGTH`, `UPLOAD_FOLDER`, `TOKEN_FILE` |
+| Input validation helpers | 45–104 | `validate_ip`, `validate_matte_id`, `validate_content_id`, `validate_artmode_settings`, `_err` |
+| Persistent TV connection manager | 107–199 | `_CONNECT_TIMEOUT`, `TVConnection` class, `_tv_conns` dict, `_tv_conns_lock`, `get_tv_conn()` |
+| Routes | 202–446 | Seven route functions (see below) |
+| `__main__` block | 449–456 | `PORT`, `FRAME_TV_HOST`, `FLASK_DEBUG` env vars; `app.run()` |
+
+### `TVConnection` class (lines 127–187)
+
+| Member | Lines | Purpose |
+|---|---|---|
+| `__init__` | 130–132 | Initialises `self._art = None` and `self._lock = threading.Lock()` |
+| `execute(ip, fn)` | 135–154 | Acquires the lock; opens connection if needed; runs `fn(art)`; on retriable error sleeps 1.5 s and retries once |
+| `_connect(ip)` | 157–178 | Lazily imports `SamsungTVArt`; tears down any stale socket; opens a new WebSocket (blocks up to `_CONNECT_TIMEOUT`); hardens token file to `0o600` |
+| `_close_art()` | 180–187 | Calls `art.close()` (ignoring errors) and sets `self._art = None` |
+
+Module-level connection registry (lines 190–199):
+- `_tv_conns: dict` — maps IP string to `TVConnection` instance
+- `_tv_conns_lock: threading.Lock` — guards `_tv_conns` dict mutations
+- `get_tv_conn(ip)` — returns existing or newly created `TVConnection` for `ip`
 
 ### Route inventory
 
-| Method | Path | Function | Purpose |
+| Method | Path | Function | TV call pattern |
 |---|---|---|---|
-| GET | `/` | `index()` | Serves `index.html` |
-| POST | `/api/connect` | `connect()` | Test TV reachability; return art support + artmode status |
-| POST | `/api/upload` | `upload()` | Accept base64 image, transcode to JPEG, upload to TV |
-| GET | `/api/artworks` | `artworks()` | Fetch list of uploaded artworks from TV |
-| POST | `/api/select` | `select()` | Set active artwork by content ID |
-| POST | `/api/artmode` | `artmode()` | Enable or disable Art Mode |
-| GET | `/api/artmode/settings` | `get_artmode_settings()` | Read Art Mode settings from TV |
-| POST | `/api/artmode/settings` | `set_artmode_settings()` | Write Art Mode settings to TV |
-| GET | `/api/mattes` | `get_mattes()` | Fetch supported matte types and colours from TV |
+| GET | `/` | `index()` | None — serves `index.html` |
+| POST | `/api/connect` | `connect()` | Short-lived REST `supported()` check (no WebSocket); then `get_tv_conn(ip).execute(ip, lambda a: a.get_artmode())` |
+| POST | `/api/upload` | `upload()` | `get_tv_conn(ip).execute(ip, do_upload)` — `a.upload()` then optional `a.select_image()` |
+| GET | `/api/artworks` | `artworks()` | `get_tv_conn(ip).execute(ip, lambda a: a.available() or [])` |
+| POST | `/api/select` | `select()` | `get_tv_conn(ip).execute(ip, lambda a: a.select_image(content_id, show=True))` |
+| POST | `/api/artmode` | `artmode()` | `get_tv_conn(ip).execute(ip, lambda a: a.set_artmode(mode))` |
+| GET | `/api/artmode/settings` | `get_artmode_settings()` | `get_tv_conn(ip).execute(ip, lambda a: a.get_artmode_settings())` + response normalisation |
+| POST | `/api/artmode/settings` | `set_artmode_settings()` | `get_tv_conn(ip).execute(ip, do_set)` — `set_artmode_settings()` + dedicated motion/sensor commands |
+| GET | `/api/mattes` | `get_mattes()` | `get_tv_conn(ip).execute(ip, lambda a: a.get_matte_list())` |
 
 ## static/js/app.js Structure
 
@@ -127,10 +141,11 @@ Sections in source order:
 ## Naming Conventions
 
 ### Python (app.py)
-- Functions: `snake_case` (`get_art`, `with_retry`, `validate_ip`)
-- Private / internal helpers: leading underscore (`_err`, `_SAFE_ID_RE`, `_VALID_MOTION_TIMERS`)
-- Constants: `UPPER_SNAKE_CASE` (`BASE_DIR`, `UPLOAD_FOLDER`, `TOKEN_FILE`)
-- Route inner closures: `do_<verb>` (`do_upload`, `do_select`, `do_list`, `do_get`, `do_set`)
+- Functions: `snake_case` (`get_tv_conn`, `validate_ip`)
+- Classes: `PascalCase` (`TVConnection`)
+- Private / internal helpers: leading underscore (`_err`, `_SAFE_ID_RE`, `_VALID_MOTION_TIMERS`, `_tv_conns`, `_tv_conns_lock`)
+- Constants: `UPPER_SNAKE_CASE` (`BASE_DIR`, `UPLOAD_FOLDER`, `TOKEN_FILE`, `_CONNECT_TIMEOUT`)
+- Route inner closures: `do_<verb>` (`do_upload`, `do_set`)
 
 ### JavaScript (app.js)
 - Variables and functions: `camelCase` (`tvConnected`, `loadArtworks`, `uploadBulk`)

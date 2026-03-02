@@ -18,10 +18,11 @@ The pattern is intentionally flat: there are no models, no ORM, no service class
 - `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/static/js/app.js` — Vanilla JS; no framework, no build step. Manages all UI state as module-level variables.
 
 ### 2. API layer (Flask)
-- `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py` — All routes, input validation, and TV interaction live here. Routes are thin: validate input, call `get_art()`, call `with_retry()`, return JSON.
+- `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py` — All routes, input validation, and TV interaction live here. Routes are thin: validate input, call `get_tv_conn(ip).execute(ip, fn)`, return JSON.
 
-### 3. TV communication layer (library)
-- `samsungtvws.SamsungTVArt` — Third-party library imported lazily inside `get_art()`. Communicates with the TV over WebSocket (port 8002). The app uses `SamsungTVArt` directly rather than `SamsungTVWS.art()` to avoid token-file conflicts that cause repeated pairing prompts.
+### 3. TV communication layer
+- `TVConnection` class (app.py:127–187) — Manages a single persistent `SamsungTVArt` WebSocket per TV IP. A `threading.Lock` serialises concurrent Flask requests so only one operation runs at a time per TV. The connection is opened lazily on first use and kept alive across requests. On failure the connection is dropped and re-opened once if the error is retriable (timeout / connection / channel / broken pipe).
+- `samsungtvws.SamsungTVArt` — Third-party library imported lazily inside `TVConnection._connect()`. Communicates with the TV over WebSocket (port 8002). The app uses `SamsungTVArt` directly rather than `SamsungTVWS.art()` to avoid token-file conflicts that cause repeated pairing prompts.
 
 ## Data Flow
 
@@ -31,7 +32,7 @@ The pattern is intentionally flat: there are no models, no ORM, no service class
 3. On upload click: `cropper.getCroppedCanvas()` produces a `<canvas>`, encoded to a base64 JPEG data URL.
 4. `fetch('/api/upload', { method: 'POST', body: JSON.stringify({ ip, image: dataURL, matte, show }) })`.
 5. Flask `upload()` route: strips the data URL prefix, base64-decodes, opens with Pillow, converts to RGB, writes a temporary JPEG to `uploads/upload_temp.jpg`.
-6. `get_art(ip, timeout=90)` opens a `SamsungTVArt` WebSocket connection.
+6. `get_tv_conn(ip).execute(ip, do_upload)` runs the upload closure on the persistent connection. `_CONNECT_TIMEOUT` (90 s) is used as both the WebSocket pairing timeout and the D2D socket timeout for the file transfer.
 7. `a.upload(temp_path, matte=matte)` transfers the JPEG to the TV; returns a `content_id`.
 8. If `show_after` is true, `a.select_image(content_id, show=True)` displays the image.
 9. Temp file is deleted in a `finally` block. `content_id` is returned to the browser as JSON.
@@ -44,23 +45,29 @@ The pattern is intentionally flat: there are no models, no ORM, no service class
 
 ### TV connection handshake
 1. Browser posts IP to `/api/connect`.
-2. Flask calls `art.supported()` via HTTP REST (no WebSocket, no pairing prompt).
-3. If supported, a 30-second-timeout WebSocket is opened to call `art.get_artmode()`. The long timeout gives the user time to accept the TV's first-time pairing dialog without the app retrying (which would spawn additional pairing dialogs).
+2. Flask instantiates a short-lived `SamsungTVArt` (10 s timeout, no WebSocket open) and calls `art.supported()` via HTTP REST — no WebSocket, no pairing prompt.
+3. If supported, `get_tv_conn(ip).execute(ip, lambda a: a.get_artmode())` opens the persistent WebSocket connection. The user may see the TV's pairing dialog here — but only once, because subsequent calls reuse this same `TVConnection` rather than opening a new socket.
 4. Response: `{ art_supported, artmode }`. The browser uses this to reveal the upload cards and Art Mode tab.
 
 ### Art Mode settings read/write
-- GET `/api/artmode/settings`: opens a WebSocket, calls `a.get_artmode_settings()`, normalises the TV's varied response shapes (dict with JSON-encoded `data` string, plain list, or flat dict) into a consistent `{ key: value }` object.
+- GET `/api/artmode/settings`: calls `get_tv_conn(ip).execute(ip, ...)` with `a.get_artmode_settings()`, then normalises the TV's varied response shapes (dict with JSON-encoded `data` string, plain list, or flat dict) into a consistent `{ key: value }` object.
 - POST `/api/artmode/settings`: splits the payload — standard settings go to `a.set_artmode_settings()`, while `motion_timer`, `motion_sensitivity`, and `brightness_sensor` each have dedicated TV commands (`set_motion_timer`, `set_motion_sensitivity`, `set_brightness_sensor_setting`).
 
 ## Abstractions
 
-### `get_art(ip, timeout)` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:108`
-Factory function. Returns a `SamsungTVArt` instance configured with the shared token file and a caller-specified timeout. Permissions on the token file are hardened to `0o600` on each call. Import of `samsungtvws` is deferred to here so the app starts even if the library is missing (producing a clear error message at runtime).
+### `TVConnection` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:127`
+Holds a single `SamsungTVArt` WebSocket and a `threading.Lock`. Key methods:
+- `execute(ip, fn)` — acquires the lock, ensures the connection is open (calling `_connect` if needed), runs `fn(art)`, and retries once on retriable errors. Non-retriable exceptions propagate immediately.
+- `_connect(ip)` — tears down any stale socket, creates a new `SamsungTVArt(timeout=_CONNECT_TIMEOUT)`, calls `art.open()` (blocks until `MS_CHANNEL_READY_EVENT` or timeout), and hardens the token file to `0o600`.
+- `_close_art()` — calls `art.close()` and sets `self._art = None`.
 
-### `with_retry(fn, retries, delay)` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:135`
-Thin retry wrapper. Calls `fn()` up to `retries+1` times, catching only retriable errors (timeout, connection, channel keywords in the exception message). Non-retriable exceptions propagate immediately. Used on every TV operation except the initial pairing handshake (where retry would cause multiple pairing dialogs).
+### `get_tv_conn(ip)` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:195`
+Factory protected by `_tv_conns_lock`. Returns the existing `TVConnection` for the given IP, or creates and stores a new one. The module-level `_tv_conns` dict and `_tv_conns_lock` ensure safe concurrent access from Flask's threaded WSGI worker.
 
-### `_err(msg, exc)` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:99`
+### `_CONNECT_TIMEOUT = 90` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:124`
+Single constant used as both the WebSocket pairing wait (long enough for the user to accept the TV's dialog) and the D2D socket timeout during image upload (long enough for large JPEG transfers). Replaces the per-call timeout parameters that existed on the old `get_art()` helper.
+
+### `_err(msg, exc)` — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:100`
 Sanitised error response helper. Logs the real exception internally via `logger.error`; returns only a human-readable string to the client, preventing exception details from leaking.
 
 ### Input validators — `/Users/scottwilliams/Documents/Claude Code/frame-tv-art/app.py:46–96`
@@ -97,20 +104,19 @@ Flask route: select()
   ├─ request.get_json()
   ├─ validate_ip(ip)           → 400-style JSON error if invalid
   ├─ validate_content_id(cid)  → 400-style JSON error if invalid
-  ├─ define do_select() closure
-  │    └─ get_art(ip, timeout=20)
-  │         └─ SamsungTVArt(host, port=8002, token_file, name, timeout)
-  │    └─ context manager: a.__enter__() opens WebSocket, authenticates
-  │    └─ a.select_image(content_id, show=True)
-  │    └─ a.__exit__() closes WebSocket
-  ├─ with_retry(do_select)     → retries on timeout/connection errors
+  ├─ get_tv_conn(ip)           → returns existing TVConnection (or creates one)
+  ├─ .execute(ip, lambda a: a.select_image(content_id, show=True))
+  │    ├─ acquires TVConnection._lock
+  │    ├─ opens WebSocket if not already open (_connect)
+  │    ├─ calls fn(art)
+  │    └─ on retriable error: closes socket, waits 1.5 s, reconnects once
   └─ jsonify({'success': True})
        │
 Browser receives JSON, updates UI state
 ```
 
 ### Error path
-Any exception inside `with_retry` that is not retriable, or that exhausts retries, propagates to the route's `except` block, which calls `_err(human_message, exc)`. `_err` logs the real exception via Python logging and returns `{'success': False, 'error': human_message}`. The browser checks `data.success` and calls `showToast(data.error, 'error')`.
+Any exception inside `TVConnection.execute` that is not retriable, or that fails on the second attempt, propagates to the route's `except` block, which calls `_err(human_message, exc)`. `_err` logs the real exception via Python logging and returns `{'success': False, 'error': human_message}`. The browser checks `data.success` and calls `showToast(data.error, 'error')`.
 
 ## Security Measures
 

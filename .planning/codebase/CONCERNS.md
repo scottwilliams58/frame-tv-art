@@ -4,21 +4,29 @@ Technical debt, potential bugs, security issues, performance concerns, and fragi
 
 ---
 
-## 1. Race Condition: Shared Temp File
+## RESOLVED
 
-**File:** `app.py` lines 221–246
-**Severity:** High (data corruption under concurrent use)
+### Repeated Pairing Dialogs
 
-The upload route writes all incoming images to a single fixed path:
+**Resolved by:** Introduction of the persistent `TVConnection` class, which replaced the former `get_art()` / `with_retry()` pattern. A single WebSocket connection per TV IP is now cached and reused across requests, so the pairing handshake is not re-triggered on every API call.
+
+---
+
+## 1. Race Condition: Shared Temp File — CRITICAL
+
+**File:** `app.py:271`
+**Severity:** Critical (data corruption under concurrent use)
+
+The upload route writes all incoming images to a single hardcoded filename **outside** the `TVConnection.execute()` lock:
 
 ```python
 temp_path = os.path.join(UPLOAD_FOLDER, 'upload_temp.jpg')
 img.save(temp_path, 'JPEG', quality=95, optimize=True)
 ```
 
-Flask runs with `threaded=True` (`app.py` line 439). If two upload requests arrive simultaneously, both threads write to and read from the same `upload_temp.jpg` file. One request will upload the other's image to the TV. The `finally` block may also delete the file before the other thread has finished using it.
+Flask runs with `threaded=True` (`app.py` line 439). If two upload requests arrive simultaneously (even to the same TV IP), Thread A saves its file, Thread B overwrites `upload_temp.jpg` before Thread A's lock-protected upload reads it. Thread A then uploads Thread B's image to the TV. The `finally` block may also delete the file before the other thread has finished using it.
 
-**Fix:** Use `tempfile.NamedTemporaryFile` or `tempfile.mkstemp` so each request gets a unique path.
+**Fix:** Use `tempfile.mkstemp()` or embed a UUID in the filename so each request gets a unique path.
 
 ---
 
@@ -161,9 +169,9 @@ The bulk upload loop skips items already marked `done` (allowing resume), but do
 
 ---
 
-## 11. `pairingAlert` Heuristic Is Fragile
+## 11. `pairingAlert` Over-Triggers on Any Connection Error
 
-**File:** `static/js/app.js` lines 457–459
+**File:** `static/js/app.js:457`
 **Severity:** Low
 
 ```js
@@ -171,7 +179,7 @@ const isFirst = /token|pair|connect|refused/i.test(data.error || '');
 pairingAlert.style.display = isFirst ? 'block' : 'none';
 ```
 
-The pairing-dialog hint is shown based on a regex match against the error string. Because error messages are sourced from the `samsungtvws` library and the underlying WebSocket stack, any change in library error wording will silently break this detection, potentially hiding the pairing hint from new users who need it most.
+The regex `/connect/i` matches the generic server message "Could not connect to TV", so `pairingAlert` is shown on **any** connection failure, not just genuine pairing failures. A user whose TV is simply offline will see the pairing prompt unnecessarily. The condition should require a more specific signal (e.g., an explicit `data.needsPairing` flag from the backend) rather than substring-matching a human-readable error string.
 
 ---
 
@@ -255,11 +263,44 @@ When `loadFile()` is called, `cropImage.src` is set to a `blob:` URL created by 
 
 ---
 
+## 19. Lock Held During `_connect()` Blocking Call
+
+**File:** `app.py:135-154`
+**Severity:** Low (acceptable for single-user local app)
+
+`TVConnection.execute()` acquires `self._lock` and then calls `_connect()`, which can block for up to 90 seconds waiting for the user to accept a TV pairing prompt. While the lock is held, all other concurrent Flask requests to the same TV IP queue behind it. For the intended single-user local deployment this is unlikely to matter in practice, but it is worth noting if the app is ever extended for multi-user or LAN-shared use.
+
+---
+
+## 20. Lock Held During Retry Sleep
+
+**File:** `app.py:152`
+**Severity:** Low
+
+Inside `TVConnection.execute()`, the 1.5-second retry sleep occurs while `self._lock` is held. This unnecessarily blocks other threads for the full sleep duration even though no TV I/O is taking place during that window. Moving the sleep outside the lock (or using a separate reconnect lock) would allow other request types to proceed during the wait.
+
+---
+
+## 21. `/api/connect` Returns Misleading Error on `get_artmode()` Failure
+
+**File:** `app.py:234-238`
+**Severity:** Low
+
+```python
+except Exception:
+    return _err('Could not connect to TV')
+```
+
+If `supported()` succeeds but `get_artmode()` raises an exception (e.g., due to a TV firmware response change), the endpoint returns "Could not connect to TV" — the same message shown when the TV is not reachable at all. The frontend (and the user) cannot distinguish a genuine connectivity failure from a post-connect API error. A separate error message or a structured error code field would make the failure mode diagnosable.
+
+---
+
 ## Summary Table
 
 | # | Area | File | Severity |
 |---|------|------|----------|
-| 1 | Race condition — shared temp file | `app.py:221` | High |
+| — | Repeated pairing dialogs | — | **RESOLVED** |
+| 1 | Race condition — shared temp file (CRITICAL) | `app.py:271` | Critical |
 | 2 | No rate limiting | `app.py` all routes | Medium |
 | 3 | No CSRF protection | `app.py` all POST routes | Medium |
 | 4 | Silent broad exception handlers | `app.py:181,236,346` / `app.js:140,413,534` | Medium |
@@ -269,7 +310,7 @@ When `loadFile()` is called, `cropImage.src` is set to a `blob:` URL created by 
 | 8 | Token stored next to source code | `app.py:40` | Low–Medium |
 | 9 | XSS via `data.error` in `innerHTML` | `app.js:739` | Low–Medium |
 | 10 | Bulk upload "X of N" toast miscounts | `app.js:418` | Low |
-| 11 | Pairing alert heuristic is fragile | `app.js:457` | Low |
+| 11 | Pairing alert over-triggers on any connection error | `app.js:457` | Low |
 | 12 | Launcher uses `kill -9` | `Launch Frame TV Art.command:16` | Low |
 | 13 | No loading state for mattes/artworks | `app.js:105,734` | Low |
 | 14 | No maxlength on IP input | `templates/index.html:110` | Very Low |
@@ -277,3 +318,6 @@ When `loadFile()` is called, `cropImage.src` is set to a `blob:` URL created by 
 | 16 | Header badge hardcodes "2024" | `templates/index.html:26` | Very Low |
 | 17 | No automated tests | — | Medium |
 | 18 | Blob URL leak on crop reset | `app.js:271` | Very Low |
+| 19 | Lock held during `_connect()` blocking call | `app.py:135-154` | Low |
+| 20 | Lock held during retry sleep | `app.py:152` | Low |
+| 21 | `/api/connect` misleading error on post-connect failure | `app.py:234-238` | Low |

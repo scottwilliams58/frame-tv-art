@@ -170,12 +170,14 @@ def connect():
         supported = art.supported()
         artmode = None
         if supported:
-            def do_connect():
-                a = get_art(ip)
-                with a:
-                    return a.get_artmode()
+            # Use a long timeout (30 s) so the user has enough time to accept
+            # the TV's pairing dialog without triggering a retry.  Do NOT wrap
+            # in with_retry here: each retry opens a fresh WebSocket and causes
+            # the TV to show the pairing prompt again, resulting in 3 dialogs.
             try:
-                artmode = with_retry(do_connect)
+                a = get_art(ip, timeout=30)
+                with a:
+                    artmode = a.get_artmode()
             except Exception:
                 artmode = 'unknown'
         return jsonify({'success': True, 'art_supported': supported, 'artmode': artmode})
@@ -221,7 +223,9 @@ def upload():
 
     try:
         def do_upload():
-            a = get_art(ip)
+            # Uploads transfer the full JPEG over WebSocket and can take 20–40 s;
+            # use a generous timeout so the transfer isn't cut off mid-stream.
+            a = get_art(ip, timeout=90)
             with a:
                 # samsungtvws >= 3.x removed the 'show' kwarg from upload().
                 # Upload first, then call select_image() to display it.
@@ -251,7 +255,7 @@ def artworks():
         return jsonify(_err('Invalid IP address'))
     try:
         def do_list():
-            a = get_art(ip)
+            a = get_art(ip, timeout=30)
             with a:
                 # Fetch all content; the library filters by category_id client-side.
                 # Passing no category avoids a TV-side filter that can cause timeouts.
@@ -276,7 +280,7 @@ def select():
         return jsonify(_err('Invalid content ID'))
     try:
         def do_select():
-            a = get_art(ip)
+            a = get_art(ip, timeout=20)
             with a:
                 a.select_image(content_id, show=True)
 
@@ -299,7 +303,7 @@ def artmode():
         return jsonify(_err('mode must be "on" or "off"'))
     try:
         def do_set():
-            a = get_art(ip)
+            a = get_art(ip, timeout=20)
             with a:
                 a.set_artmode(mode)
 
@@ -318,7 +322,7 @@ def get_artmode_settings():
         return jsonify(_err('Invalid IP address'))
     try:
         def do_get():
-            a = get_art(ip)
+            a = get_art(ip, timeout=20)
             with a:
                 return a.get_artmode_settings()
 
@@ -373,7 +377,7 @@ def get_mattes():
         return jsonify(_err('Invalid IP address'))
     try:
         def do_get():
-            a = get_art(ip)
+            a = get_art(ip, timeout=20)
             with a:
                 return a.get_matte_list()
 
@@ -408,7 +412,7 @@ def set_artmode_settings():
 
     try:
         def do_set():
-            a = get_art(ip)
+            a = get_art(ip, timeout=20)
             with a:
                 if settings:
                     a.set_artmode_settings(settings)

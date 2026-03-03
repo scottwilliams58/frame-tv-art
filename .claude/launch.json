@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frame-tv-art",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["/Users/scottwilliams/Documents/ClaudeCode/_projects/active-projects/frame-tv-art/run.sh"],
+      "port": 5001
+    }
+  ]
+}

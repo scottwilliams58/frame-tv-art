@@ -16,3 +16,7 @@ samsung_tv_token.txt
 
 # Editor
 .vscode/
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/memory/

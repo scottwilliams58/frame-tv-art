@@ -52,6 +52,20 @@ def too_large(e):
     return jsonify({'success': False, 'error': 'Image file too large (max 100 MB)'}), 413
 
 
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({'success': False, 'error': 'Malformed request'}), 400
+
+
+@app.after_request
+def set_security_headers(resp):
+    resp.headers['X-Frame-Options'] = 'DENY'
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers['Content-Security-Policy'] = "default-src 'self'"
+    resp.headers['Server'] = 'FrameArtApp'
+    return resp
+
+
 # ── Input validation helpers ──────────────────────────────────────────────────
 
 def validate_ip(ip_str: str) -> bool:

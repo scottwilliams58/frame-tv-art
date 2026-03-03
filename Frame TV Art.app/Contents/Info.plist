@@ -8,13 +8,31 @@
     <string>com.scottwilliams.frametv-art</string>
     <key>CFBundleName</key>
     <string>Frame TV Art</string>
+    <key>CFBundleDisplayName</key>
+    <string>Frame TV Art</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <!-- Minimum macOS version: Ventura (13.0) -->
     <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
+    <string>13.0</string>
+    <!-- Prefer arm64 natively; fall back to x86_64 on Intel Macs -->
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+    <!-- Standard UI app, not a background-only agent -->
     <key>LSBackgroundOnly</key>
     <false/>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
 </dict>
 </plist>

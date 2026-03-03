@@ -160,9 +160,9 @@ class TVConnection:
                     logger.warning('TV call failed (attempt %d): %s', attempt + 1, e)
                     self._close_art()
                     err_str = str(e).lower()
-                    retriable = any(
-                        kw in err_str
-                        for kw in ('timeout', 'connection', 'channel', 'broken', 'pipe')
+                    retriable = (
+                        'unauthorized' not in type(e).__name__.lower()
+                        and any(kw in err_str for kw in ('timeout', 'connection', 'channel', 'broken', 'pipe'))
                     )
                     if attempt == 0 and retriable:
                         time.sleep(1.5)
@@ -187,7 +187,46 @@ class TVConnection:
             name='FrameArtApp',
             timeout=_CONNECT_TIMEOUT,
         )
-        art.open()   # blocks until MS_CHANNEL_READY_EVENT (or timeout / pairing dialog)
+        try:
+            art.open()
+        except Exception as _open_exc:
+            # When the TV sends MS_CHANNEL_UNAUTHORIZED the library raises
+            # UnauthorizedError without saving any token it may have included.
+            # Two sub-cases:
+            #  A) TV included a pending token in the UNAUTHORIZED response
+            #     (some firmware versions do this before the user taps Allow).
+            #     Save it so the next connect attempt carries it and the TV
+            #     can match it to the accepted pairing.
+            #  B) TV sent UNAUTHORIZED with no token — our stored token is
+            #     stale/invalid.  Delete it so the next connect starts fresh
+            #     and triggers a proper pairing dialog instead of looping
+            #     forever on the stale token.
+            try:
+                from samsungtvws.exceptions import UnauthorizedError as _UnauthErr
+                if isinstance(_open_exc, _UnauthErr):
+                    _resp = _open_exc.args[0] if _open_exc.args else {}
+                    _new_token = (
+                        _resp.get("data", {}).get("token")
+                        if isinstance(_resp, dict) else None
+                    )
+                    if _new_token:
+                        with open(TOKEN_FILE, "w") as _tf:
+                            _tf.write(_new_token)
+                        os.chmod(TOKEN_FILE, 0o600)
+                        logger.info(
+                            "Pairing token saved — accept the TV dialog then click Connect again"
+                        )
+                    else:
+                        # Stale / rejected token — clear it so the next attempt
+                        # presents a fresh pairing dialog.
+                        try:
+                            os.remove(TOKEN_FILE)
+                            logger.info("Stale token cleared — pairing dialog will appear on TV")
+                        except FileNotFoundError:
+                            pass
+            except Exception:
+                pass  # non-critical; user can still retry
+            raise
 
         # Bug #5 fix: reduce the WebSocket socket timeout now that the connection
         # is established.  _CONNECT_TIMEOUT (90 s) was needed during open() for the

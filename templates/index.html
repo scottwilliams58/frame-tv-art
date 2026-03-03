@@ -107,7 +107,11 @@
         <div class="card-body">
           <label class="field-label" for="tvIp">TV IP Address</label>
           <div class="input-row">
-            <input class="input" id="tvIp" type="text" placeholder="192.168.1.XXX" spellcheck="false" autocomplete="off" />
+            <div class="ip-input-group">
+              <input class="input ip-prefix" id="tvIpPrefix" type="text" value="192.168.1." spellcheck="false" autocomplete="off" aria-label="IP prefix" />
+              <span class="ip-dot-sep">.</span>
+              <input class="input ip-last-octet" id="tvIp" type="text" placeholder="245" maxlength="3" spellcheck="false" autocomplete="off" inputmode="numeric" aria-label="Last IP octet" />
+            </div>
             <button class="btn-primary" id="connectBtn">Connect</button>
           </div>
           <p class="field-hint">Settings → General → Network → Network Status</p>

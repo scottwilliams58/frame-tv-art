@@ -235,6 +235,38 @@ html, body {
   display: flex;
   gap: 8px;
 }
+.ip-input-group {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color .15s;
+}
+.ip-input-group:focus-within { border-color: var(--accent); }
+.ip-input-group .input {
+  flex: none;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 4px 8px 12px;
+  min-width: 0;
+}
+.ip-input-group .ip-prefix {
+  flex: 1 1 auto;
+  width: 86px;
+  color: var(--muted);
+}
+.ip-dot-sep {
+  display: none;
+}
+.ip-input-group .ip-last-octet {
+  flex: 0 0 44px;
+  padding: 8px 12px 8px 0;
+  text-align: left;
+}
 .input {
   flex: 1;
   background: var(--surface2);

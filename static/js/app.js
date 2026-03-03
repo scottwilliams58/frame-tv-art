@@ -28,6 +28,7 @@ const bulkItemsEl     = document.getElementById('bulkItems');
 const bulkCountEl     = document.getElementById('bulkCount');
 
 const tvIpInput    = document.getElementById('tvIp');
+const tvIpPrefix   = document.getElementById('tvIpPrefix');
 const connectBtn   = document.getElementById('connectBtn');
 const statusChip   = document.getElementById('statusChip');
 const statusDot    = document.getElementById('statusDot');
@@ -504,9 +505,32 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
    ════════════════════════════════════════ */
 connectBtn.addEventListener('click', connectToTV);
 tvIpInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToTV(); });
+tvIpPrefix.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToTV(); });
+
+// Restore prefix and last octet from localStorage
+(function restoreIpFromStorage() {
+  try {
+    const saved = localStorage.getItem('tvIp');
+    if (saved) {
+      const parts = saved.split('.');
+      if (parts.length === 4) {
+        const prefix = parts.slice(0, 3).join('.');
+        tvIpPrefix.value = prefix + '.';
+        tvIpInput.value = parts[3];
+        return;
+      }
+    }
+    const savedPrefix = localStorage.getItem('tvIpPrefix');
+    if (savedPrefix) tvIpPrefix.value = savedPrefix;
+  } catch (_) {}
+})();
 
 async function connectToTV() {
-  const ip = tvIpInput.value.trim();
+  const prefix = (tvIpPrefix.value || '').replace(/\.+$/, '');
+  const lastOctet = tvIpInput.value.trim();
+  const ip = lastOctet ? prefix + '.' + lastOctet : prefix;
+  // Persist the prefix across sessions
+  try { localStorage.setItem('tvIpPrefix', prefix + '.'); } catch (_) {}
   if (!ip) { showToast('Enter the TV IP address first.', 'error'); return; }
   // Bug #13 fix: don't update tvIp until the connection succeeds — a failed
   // reconnect attempt was leaving tvIp pointing at the new (unreachable) IP.

@@ -61,7 +61,13 @@ def bad_request(e):
 def set_security_headers(resp):
     resp.headers['X-Frame-Options'] = 'DENY'
     resp.headers['X-Content-Type-Options'] = 'nosniff'
-    resp.headers['Content-Security-Policy'] = "default-src 'self'"
+    resp.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdnjs.cloudflare.com https://unpkg.com; "
+        "style-src 'self' https://cdnjs.cloudflare.com; "
+        "img-src 'self' blob: data:; "
+        "font-src 'self'"
+    )
     resp.headers['Server'] = 'FrameArtApp'
     return resp
 
@@ -135,6 +141,38 @@ def _err(msg: str, exc=None) -> dict:
     return {'success': False, 'error': msg}
 
 
+# ── Library bug fix: token=None in WebSocket URL ──────────────────────────────
+#
+# samsungtvws 3.0.4 always appends &token=None to the wss:// URL when no token
+# file exists.  Some Frame TV firmwares (including QN50LS03DAFXZA) respond with
+# ms.channel.timeOut when they see the literal string "None" as the token value,
+# but respond correctly (ms.channel.ready or ms.channel.unauthorized) when the
+# token param is simply absent.
+#
+# Fix: subclass SamsungTVArt and override _format_websocket_url to omit the
+# token query param entirely when no token is available.
+
+class _FixedSamsungTVArt:
+    """Mixin: omit &token= from WebSocket URL when _get_token() returns falsy."""
+
+    _SSL_URL_NO_TOKEN = "wss://{host}:{port}/api/v2/channels/{app}?name={name}"
+
+    def _format_websocket_url(self, app: str) -> str:
+        from samsungtvws import helper as _tvws_helper
+        token = self._get_token()
+        if token:
+            return super()._format_websocket_url(app)
+        # No token — omit the param entirely so the TV shows a pairing dialog
+        # instead of responding with ms.channel.timeOut.
+        params = {
+            "host": self.host,
+            "port": self.port,
+            "app": app,
+            "name": _tvws_helper.serialize_string(self.name),
+        }
+        return self._SSL_URL_NO_TOKEN.format(**params)
+
+
 # ── Persistent TV connection manager ─────────────────────────────────────────
 #
 # Samsung Frame TVs show a pairing dialog every time a NEW WebSocket connection
@@ -192,9 +230,12 @@ class TVConnection:
             raise RuntimeError(
                 "samsungtvws is not installed. Run: pip install -r requirements.txt"
             )
+        # Use _FixedSamsungTVArt which omits &token=None from the WebSocket URL.
+        class _ArtTV(_FixedSamsungTVArt, SamsungTVArt):
+            pass
         self._close_art()
         logger.info('Opening TV connection to %s (timeout=%ds)', ip, _CONNECT_TIMEOUT)
-        art = SamsungTVArt(
+        art = _ArtTV(
             host=ip,
             port=8002,
             token_file=TOKEN_FILE,
@@ -304,8 +345,10 @@ def connect():
 
     try:
         # supported() uses REST (HTTP) — no WebSocket, no pairing prompt.
-        art_check = SamsungTVArt(host=ip, port=8002, token_file=TOKEN_FILE,
-                                 name='FrameArtApp', timeout=10)
+        class _ArtTV(_FixedSamsungTVArt, SamsungTVArt):
+            pass
+        art_check = _ArtTV(host=ip, port=8002, token_file=TOKEN_FILE,
+                           name='FrameArtApp', timeout=10)
         supported = art_check.supported()
 
         artmode = None

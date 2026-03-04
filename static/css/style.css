@@ -150,9 +150,9 @@ html, body {
 /* ── Cropper wrapper ── */
 .crop-wrapper {
   width: 100%;
-  height: 100%;
   min-height: 420px;
-  background: #000;
+  background: var(--surface);
+  align-self: stretch;
 }
 .crop-wrapper img {
   display: block;
@@ -254,17 +254,18 @@ html, body {
   padding: 8px 4px 8px 12px;
   min-width: 0;
 }
-.ip-input-group .ip-prefix {
-  flex: 1 1 auto;
-  width: 86px;
+.ip-prefix-label {
+  padding: 8px 0 8px 12px;
   color: var(--muted);
-}
-.ip-dot-sep {
-  display: none;
+  font-size: 13px;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
 }
 .ip-input-group .ip-last-octet {
-  flex: 0 0 44px;
-  padding: 8px 12px 8px 0;
+  flex: 0 0 48px;
+  padding: 8px 12px 8px 4px;
   text-align: left;
 }
 .input {

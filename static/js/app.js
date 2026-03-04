@@ -505,7 +505,6 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
    ════════════════════════════════════════ */
 connectBtn.addEventListener('click', connectToTV);
 tvIpInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToTV(); });
-tvIpPrefix.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToTV(); });
 
 // Restore prefix and last octet from localStorage
 (function restoreIpFromStorage() {
@@ -515,18 +514,18 @@ tvIpPrefix.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectTo
       const parts = saved.split('.');
       if (parts.length === 4) {
         const prefix = parts.slice(0, 3).join('.');
-        tvIpPrefix.value = prefix + '.';
+        tvIpPrefix.textContent = prefix + '.';
         tvIpInput.value = parts[3];
         return;
       }
     }
     const savedPrefix = localStorage.getItem('tvIpPrefix');
-    if (savedPrefix) tvIpPrefix.value = savedPrefix;
+    if (savedPrefix) tvIpPrefix.textContent = savedPrefix;
   } catch (_) {}
 })();
 
 async function connectToTV() {
-  const prefix = (tvIpPrefix.value || '').replace(/\.+$/, '');
+  const prefix = (tvIpPrefix.textContent || '').replace(/\.+$/, '');
   const lastOctet = tvIpInput.value.trim();
   const ip = lastOctet ? prefix + '.' + lastOctet : prefix;
   // Persist the prefix across sessions

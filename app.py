@@ -565,10 +565,29 @@ def set_artmode_settings():
     motion_sensitivity = settings.pop('motion_sensitivity', None)
     brightness_sensor  = settings.pop('brightness_sensor', None)
 
+    # Pop individual settings from dict for targeted method dispatch.
+    # The samsungtvws library does not expose a set_artmode_settings(); we must
+    # call each setter individually.
+    brightness = settings.pop('brightness', None)
+    color      = settings.pop('color', None)
+    shuffle    = settings.pop('shuffle', None)
+    display_timer = settings.pop('display_timer', None)
+
     try:
         def do_set(a):
-            if settings:
-                a.set_artmode_settings(settings)
+            if brightness is not None:
+                a.set_brightness(int(brightness))
+            if color is not None:
+                a.set_color_temperature(color)
+            # set_slideshow_status handles both shuffle and display_timer together.
+            # duration=0 means off; type=True means shuffled.
+            if shuffle is not None or display_timer is not None:
+                kwargs = {}
+                if display_timer is not None:
+                    kwargs['duration'] = int(display_timer)
+                if shuffle is not None:
+                    kwargs['type'] = bool(shuffle)
+                a.set_slideshow_status(**kwargs)
             if motion_timer is not None:
                 a.set_motion_timer(str(motion_timer))
             if motion_sensitivity is not None:

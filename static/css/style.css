@@ -195,7 +195,7 @@ html, body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
+  overflow: visible;
 }
 .card-header {
   display: flex;
@@ -207,6 +207,7 @@ html, body {
   color: var(--text);
   border-bottom: 1px solid var(--border);
   background: var(--surface2);
+  border-radius: var(--radius) var(--radius) 0 0;
 }
 .card-header svg { color: var(--accent); flex-shrink: 0; }
 .card-body {

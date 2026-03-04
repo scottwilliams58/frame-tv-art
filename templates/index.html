@@ -53,9 +53,10 @@
           <img id="cropImage" alt="Image to crop" />
         </div>
 
-        <input type="file" id="fileInput" accept="image/*" style="display:none" />
-        <input type="file" id="fileInputBulk" accept="image/*" multiple style="display:none" />
       </div>
+
+      <input type="file" id="fileInput" accept="image/*" style="display:none" />
+      <input type="file" id="fileInputBulk" accept="image/*" multiple style="display:none" />
 
       <!-- Single mode: crop controls -->
       <div class="crop-controls" id="cropControls" style="display:none">
@@ -109,7 +110,7 @@
           <div class="input-row">
             <div class="ip-input-group">
               <span class="ip-prefix-label" id="tvIpPrefix">192.168.1.</span>
-              <input class="input ip-last-octet" id="tvIp" type="text" placeholder="245" maxlength="3" spellcheck="false" autocomplete="off" inputmode="numeric" aria-label="Last IP octet" />
+              <input class="input ip-last-octet" id="tvIp" type="text" placeholder="" maxlength="3" spellcheck="false" autocomplete="off" inputmode="numeric" aria-label="Last IP octet" />
             </div>
             <button class="btn-primary" id="connectBtn">Connect</button>
           </div>

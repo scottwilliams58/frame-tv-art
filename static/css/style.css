@@ -159,6 +159,25 @@ html, body {
   max-width: 100%;
 }
 
+/* ── Hidden-by-default elements (JS overrides display when needed) ──
+   These mirror the HTML style="display:none" attributes. Having them in CSS
+   too means that if Lucide or anything else clears the inline style, the
+   elements fall back to hidden rather than their natural block/flex value. */
+#cropWrapper, #cropControls,
+#bulkHint, #bulkQueue,
+#cardArtworks, #cardUpload,
+#uploadBtn, #uploadBulkBtn,
+#progressWrap,
+#resultSuccess, #resultError,
+#statusChip,
+#panel-artmode,
+#amDisplay, #amAppearance, #amMotion, #amActions,
+#amSuccess, #amError { display: none; }
+
+/* File inputs are never rendered visually — !important prevents any
+   accidental show even if inline style is stripped */
+#fileInput, #fileInputBulk { display: none !important; }
+
 /* ── Crop controls ── */
 .crop-controls {
   background: var(--surface);

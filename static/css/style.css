@@ -7,8 +7,8 @@
   --surface2:  #243354;   /* blend: between surface & mid   */
   --border:    #2d3e5c;   /* blend: mid tone                */
   --border2:   #3a506b;   /* palette: blue-grey             */
-  --accent:    #5bc0be;   /* palette: teal                  */
-  --accent-dk: #3d9a98;   /* darkened teal                  */
+  --accent:    #1f7a8c;   /* teal                           */
+  --accent-dk: #155f6e;   /* darkened teal                  */
   --text:      #e8edf5;   /* near-white, slightly blue-cool */
   --muted:     #6f859e;   /* muted blue-grey                */
   --success:   #2ea043;
@@ -69,8 +69,8 @@ html, body {
   font-size: 11px;
   font-weight: 500;
   color: var(--accent);
-  background: rgba(91,192,190,.12);
-  border: 1px solid rgba(91,192,190,.25);
+  background: rgba(31,122,140,.12);
+  border: 1px solid rgba(31,122,140,.25);
   border-radius: 20px;
   padding: 3px 10px;
 }
@@ -120,11 +120,11 @@ html, body {
 }
 .upload-zone:hover {
   border-color: var(--accent);
-  background: rgba(91,192,190,.04);
+  background: rgba(31,122,140,.04);
 }
 .upload-zone.drag-over {
   border-color: var(--accent);
-  background: rgba(91,192,190,.08);
+  background: rgba(31,122,140,.08);
 }
 
 .upload-placeholder {
@@ -149,7 +149,7 @@ html, body {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.link-btn:hover { color: #7dd5d3; }
+.link-btn:hover { color: #35a8c0; }
 
 /* ── Cropper wrapper ── */
 .crop-wrapper {
@@ -352,7 +352,7 @@ html, body {
   transition: background .15s, opacity .15s;
   white-space: nowrap;
 }
-.btn-primary:hover { background: #6acfcd; }
+.btn-primary:hover { background: #2899af; }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 
 .btn-secondary {
@@ -387,7 +387,7 @@ html, body {
   color: var(--accent);
 }
 .btn-ratio.active {
-  background: rgba(91,192,190,.15);
+  background: rgba(31,122,140,.15);
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -478,7 +478,7 @@ html, body {
 .progress-fill {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, var(--accent), #7dd5d3);
+  background: linear-gradient(90deg, var(--accent), #35a8c0);
   border-radius: 99px;
   transition: width .4s ease;
 }
@@ -817,10 +817,10 @@ svg.lucide {
   border: 2.5px solid var(--accent);
   border-radius: 9999px;
   cursor: pointer;
-  box-shadow: 0 0 0 3px rgba(91,192,190,.15);
+  box-shadow: 0 0 0 3px rgba(31,122,140,.15);
   transition: box-shadow .15s;
 }
-.slider::-webkit-slider-thumb:hover { box-shadow: 0 0 0 5px rgba(91,192,190,.25); }
+.slider::-webkit-slider-thumb:hover { box-shadow: 0 0 0 5px rgba(31,122,140,.25); }
 .slider-val {
   font-size: 12px;
   font-weight: 600;

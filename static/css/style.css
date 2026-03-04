@@ -23,9 +23,11 @@ html, body {
   height: 100%;
   background-color: #0b132b;  /* solid fallback */
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E"),
-    linear-gradient(135deg, #0b132b 0%, #1c2541 45%, #2d3f5a 75%, #3a506b 100%);
-  background-attachment: fixed, fixed;
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
+    radial-gradient(ellipse 55% 55% at 12% 18%, rgba(58,80,107,.6) 0%, transparent 70%),
+    radial-gradient(ellipse 28% 32% at 4%  6%,  rgba(31,122,140,.28) 0%, transparent 65%),
+    linear-gradient(155deg, #152035 0%, #0b132b 55%, #0c1628 100%);
+  background-attachment: fixed, fixed, fixed, fixed;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;

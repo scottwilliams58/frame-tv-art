@@ -292,7 +292,7 @@ html, body {
   flex-shrink: 0;
 }
 .ip-input-group .ip-last-octet {
-  flex: 0 0 48px;
+  flex: 1;
   padding: 8px 12px;
   text-align: left;
 }
@@ -354,6 +354,10 @@ html, body {
   cursor: pointer;
   transition: background .15s, opacity .15s;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 .btn-primary:hover { background: #2899af; }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
@@ -368,6 +372,10 @@ html, body {
   font-weight: 500;
   cursor: pointer;
   transition: border-color .15s, background .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent-text); }
 

@@ -6,6 +6,7 @@ import time
 import ipaddress
 import logging
 import threading
+import concurrent.futures
 import tempfile
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
@@ -207,7 +208,14 @@ class TVConnection:
                 try:
                     if self._art is None or not self._art.is_alive():
                         self._connect(ip)
-                    return fn(self._art)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                        _fut = _ex.submit(fn, self._art)
+                        try:
+                            return _fut.result(timeout=_OP_TIMEOUT + 5)
+                        except concurrent.futures.TimeoutError:
+                            self._close_art()
+                            raise TimeoutError(
+                                f'TV did not respond within {_OP_TIMEOUT + 5}s')
                 except Exception as e:
                     logger.warning('TV call failed (attempt %d): %s', attempt + 1, e)
                     self._close_art()

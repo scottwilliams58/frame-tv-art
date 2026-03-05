@@ -94,17 +94,23 @@ function showToast(msg, type = 'info') {
 // when the response isn't JSON so callers show something meaningful.
 // Bug #16 fix: don't send Content-Type header on GET requests (no body).
 async function api(endpoint, method = 'GET', body = null) {
-  const opts = { method };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  const opts = { method, signal: ctrl.signal };
   if (body !== null) {
     opts.headers = { 'Content-Type': 'application/json' };
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(endpoint, opts);
-  const ct = res.headers.get('Content-Type') || '';
-  if (!ct.includes('application/json')) {
-    throw new Error(`Server error (HTTP ${res.status})`);
+  try {
+    const res = await fetch(endpoint, opts);
+    const ct = res.headers.get('Content-Type') || '';
+    if (!ct.includes('application/json')) {
+      throw new Error(`Server error (HTTP ${res.status})`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 /* ── Matte helpers (dynamic list from TV) ── */

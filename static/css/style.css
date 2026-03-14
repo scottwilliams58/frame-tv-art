@@ -540,8 +540,8 @@ html, body {
 /* ── Artworks grid ── */
 .artworks-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 .artwork-item {
   background: var(--surface2);
@@ -561,8 +561,9 @@ html, body {
 }
 .artwork-item:hover { border-color: var(--accent); color: var(--accent-text); }
 .artwork-thumb {
-  width: 60px;
-  height: 34px;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
   background: var(--border);
   border-radius: 3px;
   display: flex;

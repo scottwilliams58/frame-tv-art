@@ -859,6 +859,7 @@ async function loadArtworks() {
       const id = item.content_id || item.id || '';
       const div = document.createElement('div');
       div.className = 'artwork-item';
+      div.dataset.artId = id;
       // Use textContent / setAttribute — never innerHTML — with TV-sourced data
       div.setAttribute('title', `ID: ${id}\nClick to display on TV`);
 
@@ -878,6 +879,30 @@ async function loadArtworks() {
       artworksGrid.appendChild(div);
     });
     lucide.createIcons();
+
+    // Lazily fetch thumbnails — grid is already usable while this loads
+    const thumbIds = list.map(item => item.content_id || item.id || '').filter(Boolean).slice(0, 12);
+    if (thumbIds.length) {
+      try {
+        const td = await api(
+          `/api/artworks/thumbnails?ip=${encodeURIComponent(tvIp)}&ids=${encodeURIComponent(thumbIds.join(','))}`
+        );
+        if (td.success && td.thumbnails) {
+          Object.entries(td.thumbnails).forEach(([cid, url]) => {
+            const el = artworksGrid.querySelector(`[data-art-id="${CSS.escape(cid)}"]`);
+            if (!el) return;
+            const thumb = el.querySelector('.artwork-thumb');
+            if (!thumb) return;
+            thumb.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = '';
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:3px;';
+            thumb.appendChild(img);
+          });
+        }
+      } catch { /* thumbnails are optional — silently ignore */ }
+    }
   } catch { artworksGrid.innerHTML = '<span class="muted">Failed to load.</span>'; }
 }
 

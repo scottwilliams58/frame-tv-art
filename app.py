@@ -453,6 +453,37 @@ def artworks():
         return jsonify(_err('Could not fetch artwork list', e)), 502
 
 
+@app.route('/api/artworks/thumbnails', methods=['GET'])
+def artwork_thumbnails():
+    ip      = request.args.get('ip',  '').strip()
+    ids_raw = request.args.get('ids', '').strip()
+    if not ip or not ids_raw:
+        return jsonify(_err('ip and ids required')), 400
+    if not validate_ip(ip):
+        return jsonify(_err('Invalid IP address')), 400
+    id_list = [i.strip() for i in ids_raw.split(',') if i.strip()][:12]
+    for cid in id_list:
+        if not validate_content_id(cid):
+            return jsonify(_err(f'Invalid content_id: {cid}')), 400
+
+    def do_batch(a):
+        result = {}
+        for cid in id_list:
+            try:
+                raw = a.get_thumbnail(cid)   # single string -> bytearray | None
+                if raw:
+                    result[cid] = 'data:image/jpeg;base64,' + base64.b64encode(bytes(raw)).decode()
+            except Exception:
+                pass   # skip failed individual thumbnails
+        return result
+
+    try:
+        thumbnails = get_tv_conn(ip).execute(ip, do_batch)
+        return jsonify({'success': True, 'thumbnails': thumbnails})
+    except Exception as e:
+        return jsonify(_err('Could not fetch thumbnails', e)), 502
+
+
 @app.route('/api/select', methods=['POST'])
 def select():
     data = request.get_json()

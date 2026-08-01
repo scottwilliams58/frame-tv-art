@@ -1,0 +1,18 @@
+{
+  "description": "Tab bar and trigger (active/inactive states)",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Tab/Bar": {
+      "selector": ".tab-bar",
+      "file": "templates/index.html"
+    },
+    "Tab/Trigger": {
+      "selector": ".tab-trigger",
+      "file": "templates/index.html"
+    },
+    "Tab/Trigger (active)": {
+      "selector": ".tab-trigger.active",
+      "file": "templates/index.html"
+    }
+  }
+}

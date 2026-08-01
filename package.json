@@ -1,0 +1,11 @@
+{
+  "name": "frame-tv-art",
+  "version": "1.0.0",
+  "description": "Frame TV Art — Samsung Frame TV artwork uploader",
+  "scripts": {
+    "figma-tokens": "node scripts/figma-tokens.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

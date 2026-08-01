@@ -1,0 +1,14 @@
+{
+  "description": "Artwork grid item and grid container",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Artwork/Item": {
+      "selector": ".artwork-item",
+      "file": "templates/index.html"
+    },
+    "Artwork/Grid": {
+      "selector": ".artwork-grid",
+      "file": "templates/index.html"
+    }
+  }
+}

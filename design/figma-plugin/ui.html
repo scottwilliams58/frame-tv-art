@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Frame TV Art — Build Library</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 11px;
+      background: #1e1e1e;
+      color: #e6e6e6;
+      height: 340px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid #3c3c3c;
+      flex-shrink: 0;
+    }
+    .header-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .header-title svg {
+      flex-shrink: 0;
+      opacity: 0.5;
+    }
+    .header-desc {
+      font-size: 11px;
+      color: #8c8c8c;
+      line-height: 1.5;
+    }
+
+    /* ── Actions ── */
+    .actions {
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+      border-bottom: 1px solid #3c3c3c;
+    }
+
+    button {
+      width: 100%;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.1s, opacity 0.1s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btn-build {
+      background: #0d99ff;
+      color: #ffffff;
+    }
+    #btn-build:hover:not(:disabled) { background: #1aa3ff; }
+    #btn-build:active:not(:disabled) { background: #0b87e0; }
+
+    #btn-clear {
+      background: transparent;
+      color: #b3b3b3;
+      border: 1px solid #3c3c3c;
+    }
+    #btn-clear:hover:not(:disabled) { background: #2c2c2c; color: #e6e6e6; border-color: #5a5a5a; }
+
+    /* ── Status bar ── */
+    #status {
+      flex-shrink: 0;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 0 16px;
+      height: 32px;
+      font-size: 11px;
+      border-bottom: 1px solid #3c3c3c;
+    }
+    #status.info  { color: #0d99ff; display: flex; }
+    #status.ok    { color: #14ae5c; display: flex; }
+    #status.error { color: #f24822; display: flex; }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .info  .status-dot { background: #0d99ff; }
+    .ok    .status-dot { background: #14ae5c; }
+    .error .status-dot { background: #f24822; }
+
+    /* ── Log panel ── */
+    #log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 16px;
+      display: none;
+      font-size: 11px;
+      color: #8c8c8c;
+      line-height: 1.6;
+    }
+    #log::-webkit-scrollbar { width: 4px; }
+    #log::-webkit-scrollbar-track { background: transparent; }
+    #log::-webkit-scrollbar-thumb { background: #3c3c3c; border-radius: 2px; }
+
+    #log div { padding: 1px 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; }
+    #log div.done { color: #14ae5c; }
+    #log div.err  { color: #f24822; }
+
+    /* spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 10px; height: 10px;
+      border: 1.5px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-title">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <rect width="12" height="12" rx="2" fill="#0d99ff" opacity="0.2"/>
+        <path d="M3 4h6M3 6h4M3 8h5" stroke="#0d99ff" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Frame TV Art
+    </div>
+    <div class="header-desc">Builds Foundations and Components pages using the Frame TV Art design tokens.</div>
+  </div>
+
+  <div class="actions">
+    <button id="btn-build">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="M2 2h4l4 4v4H2V2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+        <path d="M6 2v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+      </svg>
+      Build Component Library
+    </button>
+    <button id="btn-clear">Clear Generated Pages</button>
+  </div>
+
+  <div id="status"><span class="status-dot"></span><span id="status-text"></span></div>
+  <div id="log"></div>
+
+  <script>
+    const statusEl   = document.getElementById("status");
+    const statusText = document.getElementById("status-text");
+    const log        = document.getElementById("log");
+    const btnBuild   = document.getElementById("btn-build");
+    const btnClear   = document.getElementById("btn-clear");
+
+    function setStatus(msg, type) {
+      statusEl.className = type;
+      statusText.textContent = msg;
+      const dot = statusEl.querySelector(".status-dot, .spinner");
+      dot.className = (type === "info") ? "spinner" : "status-dot";
+    }
+
+    function addLog(msg, cls) {
+      log.style.display = "block";
+      const d = document.createElement("div");
+      if (cls) d.className = cls;
+      d.textContent = msg;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    btnBuild.addEventListener("click", () => {
+      btnBuild.disabled = true;
+      btnClear.disabled = true;
+      while (log.firstChild) log.removeChild(log.firstChild);
+      log.style.display = "none";
+      setStatus("Building library\u2026", "info");
+      parent.postMessage({ pluginMessage: { type: "build" } }, "*");
+    });
+
+    btnClear.addEventListener("click", () => {
+      btnBuild.disabled = true;
+      btnClear.disabled = true;
+      setStatus("Clearing generated pages\u2026", "info");
+      parent.postMessage({ pluginMessage: { type: "clear" } }, "*");
+    });
+
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === "log") {
+        addLog(msg.text, msg.cls || "");
+      } else if (msg.type === "done") {
+        setStatus(msg.text, "ok");
+        btnBuild.disabled = false;
+        btnClear.disabled = false;
+      } else if (msg.type === "error") {
+        setStatus("Error: " + msg.text, "error");
+        btnBuild.disabled = false;
+        btnClear.disabled = false;
+      } else if (msg.type === "cleared") {
+        setStatus("Pages cleared.", "ok");
+        btnBuild.disabled = false;
+        btnClear.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

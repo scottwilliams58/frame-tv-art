@@ -1,0 +1,9 @@
+{
+  "codeConnect": {
+    "figmaFileUrl": "https://www.figma.com/design/8wuQQ0t4pIwKexTc66b3Jx/Untitled?node-id=0-1&t=fzDkMEfX9CldSF06-1",
+    "include": [
+      "design/code-connect/**/*.json"
+    ],
+    "storybook": null
+  }
+}

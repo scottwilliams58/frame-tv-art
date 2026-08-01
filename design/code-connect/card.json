@@ -1,0 +1,18 @@
+{
+  "description": "Card with Header and Body sub-components",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Card": {
+      "selector": ".card",
+      "file": "templates/index.html"
+    },
+    "Card/Header": {
+      "selector": ".card-header",
+      "file": "templates/index.html"
+    },
+    "Card/Body": {
+      "selector": ".card-body",
+      "file": "templates/index.html"
+    }
+  }
+}

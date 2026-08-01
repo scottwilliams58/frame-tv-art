@@ -1,0 +1,18 @@
+{
+  "description": "Header badge and Art Mode badge (on/off)",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Badge/Header": {
+      "selector": ".badge-header",
+      "file": "templates/index.html"
+    },
+    "Badge/ArtMode (on)": {
+      "selector": ".badge-artmode.on",
+      "file": "templates/index.html"
+    },
+    "Badge/ArtMode (off)": {
+      "selector": ".badge-artmode.off",
+      "file": "templates/index.html"
+    }
+  }
+}

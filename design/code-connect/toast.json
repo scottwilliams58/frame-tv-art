@@ -1,0 +1,14 @@
+{
+  "description": "Toast notification \u2014 success and error variants",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Toast (success)": {
+      "selector": ".toast.success",
+      "file": "templates/index.html"
+    },
+    "Toast (error)": {
+      "selector": ".toast.error",
+      "file": "templates/index.html"
+    }
+  }
+}

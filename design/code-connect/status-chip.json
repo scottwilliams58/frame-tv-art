@@ -1,0 +1,18 @@
+{
+  "description": "Connection status chip \u2014 connected/connecting/disconnected",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Status/Chip (connected)": {
+      "selector": ".status-chip.connected",
+      "file": "templates/index.html"
+    },
+    "Status/Chip (connecting)": {
+      "selector": ".status-chip.connecting",
+      "file": "templates/index.html"
+    },
+    "Status/Chip (disconnected)": {
+      "selector": ".status-chip.disconnected",
+      "file": "templates/index.html"
+    }
+  }
+}

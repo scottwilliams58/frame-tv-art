@@ -1,0 +1,26 @@
+{
+  "description": "Button variants: Primary, Secondary, Ratio, Tool, Send",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Button/Primary": {
+      "selector": ".btn-primary",
+      "file": "templates/index.html"
+    },
+    "Button/Secondary": {
+      "selector": ".btn-secondary",
+      "file": "templates/index.html"
+    },
+    "Button/Ratio": {
+      "selector": ".ratio-btn",
+      "file": "templates/index.html"
+    },
+    "Button/Tool": {
+      "selector": ".tool-btn",
+      "file": "templates/index.html"
+    },
+    "Button/Send": {
+      "selector": ".send-btn",
+      "file": "templates/index.html"
+    }
+  }
+}

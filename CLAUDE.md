@@ -1,128 +1,50 @@
-# Frame TV Art — Claude Rules
+# Frame TV Art
 
-⚠️ READ THIS BEFORE DOING ANYTHING ELSE
-## The One Unresolved Problem
+Local Python/Flask app that uploads and manages art on a Samsung Frame TV over the LAN. Runs on the same network as the TV at http://127.0.0.1:5001.
 
-Token persistence is broken. This is the root cause of every connection failure.
+## Knowledge base (Obsidian vault)
 
-**Symptoms:**
-* The TV shows a pairing prompt every time the app runs
-* The app accepts the pairing but never successfully connects
-* This has happened across multiple debug sessions
-
-**What "fixed" looks like:**
-* The TV shows a pairing prompt exactly once, ever
-* A token file is written to disk immediately after that pairing is accepted
-* Every subsequent run connects silently with no prompt
-* The token file persists between app restarts
-
-Do not move on to any other issue until this is confirmed working end to end.
-
-## Token Implementation Requirements
-
-Samsung's WebSocket API requires a `token_file` argument when instantiating `SamsungTVWS`. Without it, a new token is requested on every connection.
-
-The correct pattern is:
-```python
-import os
-from samsungtvws import SamsungTVWS
-
-TOKEN_PATH = os.path.join(os.path.dirname(__file__), "tv-token.txt")
-
-tv = SamsungTVWS(
-    host=TV_IP,
-    port=8002,
-    token_file=TOKEN_PATH
-)
+```
+~/Library/Mobile Documents/iCloud~md~obsidian/Documents/ObsidianVault/claude-code/frame-tv-art
 ```
 
-**Checklist before assuming the connection code is correct:**
-* `SamsungTVWS` is instantiated with `port=8002` (not 8001)
-* `token_file` points to an absolute path, not a relative one
-* That file path is writable by the app process
-* After the first successful pairing, `tv-token.txt` actually exists on disk
-* On subsequent runs, the token file is read and no pairing prompt appears on the TV
+- `.planning/codebase/` — architecture, stack, conventions
+- `design/spec.md` — design spec
+- `BUG_BASH.md` — known bugs and full debugging history
+- `TEST_REPORT.md` — test results
 
-If the TV is prompting to pair more than once, stop and fix token persistence. Do not attempt to debug anything else first.
+Read the vault before re-investigating anything. The TV connection bugs have a long history there; do not rediscover them.
 
-## Debugging Protocol
+## Run & test
 
-Because the TV cannot be mocked or unit tested, every change to connection or auth code must be verified manually:
-
-1. Delete `tv-token.txt` if it exists
-2. Run the app
-3. Watch the TV — accept the pairing prompt once
-4. Confirm `tv-token.txt` was created and is non-empty
-5. Restart the app without touching the token file
-6. Confirm the TV does NOT prompt again and the connection succeeds
-
-Only if steps 4 and 6 both pass is the token issue resolved.
-
-## What Has Already Been Tried
-
-* Multiple rounds of debugging connection and auth failures (see BUG_BASH.md)
-* The TV consistently asks to pair multiple times, indicating the token is not persisting
-* The app is a Python/Flask app running locally on the same network as the TV
-
-## Known Working References
-
-Other projects using the same samsungtvws library that handle token persistence correctly:
-* https://github.com/ow/samsung-frame-art
-* https://github.com/bc-bane/frameTVArtModePi
-* https://jonsully.net/blog/samsung-frame-art-api
-
-When in doubt, compare the `SamsungTVWS` instantiation in `app.py` against these examples.
-
----
-
-porary files in Flask routes
-
-Flask runs with `threaded=True`. Never use a fixed filename for temp files
-inside request handlers — concurrent uploads would corrupt each other.
-
-**Wrong:**
-```python
-temp_path = os.path.join(UPLOAD_FOLDER, 'upload_temp.jpg')
-img.save(temp_path, ...)
+```
+python3 app.py &          # server on :5001
+python3 -m pytest tests/ -v
 ```
 
-**Correct — unique file per request:**
-```python
-fd, temp_path = tempfile.mkstemp(suffix='.jpg', dir=UPLOAD_FOLDER)
-os.close(fd)
-try:
-    img.save(temp_path, ...)
-    ...
-finally:
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
-```
+## TV connection — invariants
 
-Always `import tempfile` at the top of `app.py`.
+Token persistence is **implemented and must stay that way** (`app.py`, `TOKEN_FILE` → instance path, `SamsungTVWS(host, port=8002, token_file=TOKEN_FILE)`). Without a `token_file` argument the library requests a new token on every connection and the TV prompts to pair every run.
 
-## Environment quirks (macOS Tahoe)
+- Port is **8002**, not 8001.
+- `token_file` must be an **absolute** path, in a directory writable by the app process.
+- Correct behaviour: TV prompts to pair exactly once, ever; the token file is written immediately and every later run connects silently.
 
-The Edit and Write tools may fail with a pre-tool hook error (missing security
-guidance plugin script). Workaround — use Bash + Python to edit files:
-```bash
-python3 -c "
-with open('app.py') as f: c = f.read()
-c = c.replace('OLD_STRING', 'NEW_STRING')
-with open('app.py', 'w') as f: f.write(c)
-"
-```
+If the TV starts prompting to pair more than once, that is a token-persistence regression — fix it before debugging anything else.
 
-`preview_start` cannot access files under `~/Documents/` (macOS sandbox).
-Launch the server with Bash instead: `python3 app.py &`
-App runs on http://127.0.0.1:5001. For LAN access: `FRAME_TV_HOST=0.0.0.0 python3 app.py`
+**Verifying a connection/auth change** (the TV cannot be mocked or unit tested, so this is manual):
 
-## Running tests
+1. Delete the token file. 2. Run the app. 3. Accept the pairing prompt on the TV once. 4. Confirm the token file exists and is non-empty. 5. Restart without touching it. 6. Confirm no second prompt and a successful connection. Steps 4 and 6 must both pass.
 
-`python3 -m pytest tests/ -v` — unit tests for TVConnection retry logic
+## Gotchas
 
-## samsungtvws library gotcha
+- **`samsungtvws`:** on `MS_CHANNEL_UNAUTHORIZED`, `SamsungTVArt.open()` raises `UnauthorizedError(response)` and silently drops the token. Recover it with `exc.args[0].get("data", {}).get("token")`.
+- **Flask temp files:** the server runs `threaded=True`. Never use a fixed filename for temp files inside a request handler — use `tempfile.mkstemp(suffix='.jpg', dir=UPLOAD_FOLDER)` and remove it in a `finally`.
+- **Figma Plugin API:** fill/stroke colors must be `{r, g, b}` with **no `a` key** — use the `rgb()` / `rgba()` / `setStrokes()` helpers, which strip it. `counterAxisAlignItems` accepts only `MIN | MAX | CENTER | BASELINE`; `FLEX_START` is invalid, use `MIN`.
+- **macOS Tahoe:** Edit/Write tools may fail with a pre-tool hook error — fall back to Bash + Python for edits. `preview_start` cannot access files under `~/Documents/`; launch the server with Bash instead.
 
-When the TV sends `MS_CHANNEL_UNAUTHORIZED`, `SamsungTVArt.open()` raises
-`UnauthorizedError(response)` and **silently drops any token** in the response.
-To save/inspect the token: `exc.args[0].get("data", {}).get("token")`.
-The token file lives at `~/.cache/frame-tv-art/samsung_tv_token.txt` (mode 0600).
+## Reference implementations
+
+- https://github.com/ow/samsung-frame-art
+- https://github.com/bc-bane/frameTVArtModePi
+- https://jonsully.net/blog/samsung-frame-art-api

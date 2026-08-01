@@ -1,0 +1,22 @@
+{
+  "description": "Input, Select, Checkbox, Slider form controls",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Input": {
+      "selector": "input[type=text], input[type=number]",
+      "file": "templates/index.html"
+    },
+    "Select": {
+      "selector": "select",
+      "file": "templates/index.html"
+    },
+    "Checkbox": {
+      "selector": "input[type=checkbox]",
+      "file": "templates/index.html"
+    },
+    "Slider": {
+      "selector": "input[type=range]",
+      "file": "templates/index.html"
+    }
+  }
+}

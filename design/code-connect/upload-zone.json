@@ -1,0 +1,14 @@
+{
+  "description": "Upload drop zone \u2014 empty and hover states",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "UploadZone (empty)": {
+      "selector": ".upload-zone",
+      "file": "templates/index.html"
+    },
+    "UploadZone (hover)": {
+      "selector": ".upload-zone.drag-over",
+      "file": "templates/index.html"
+    }
+  }
+}

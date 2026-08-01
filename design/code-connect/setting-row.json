@@ -1,0 +1,10 @@
+{
+  "description": "Setting row \u2014 label + control layout",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "SettingRow": {
+      "selector": ".setting-row",
+      "file": "templates/index.html"
+    }
+  }
+}

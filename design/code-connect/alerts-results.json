@@ -1,0 +1,18 @@
+{
+  "description": "Alert/Info, Result/Success, Result/Error",
+  "figmaNodeId": "REPLACE_WITH_NODE_ID",
+  "variants": {
+    "Alert/Info": {
+      "selector": ".alert-info",
+      "file": "templates/index.html"
+    },
+    "Result/Success": {
+      "selector": ".result-success",
+      "file": "templates/index.html"
+    },
+    "Result/Error": {
+      "selector": ".result-error",
+      "file": "templates/index.html"
+    }
+  }
+}

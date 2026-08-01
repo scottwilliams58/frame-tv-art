@@ -2,18 +2,18 @@
 
 Local Python/Flask app that uploads and manages art on a Samsung Frame TV over the LAN. Runs on the same network as the TV at http://127.0.0.1:5001.
 
-## Knowledge base (Obsidian vault)
+## Knowledge base
 
-```
-~/Library/Mobile Documents/iCloud~md~obsidian/Documents/ObsidianVault/claude-code/frame-tv-art
-```
+In this repo:
 
-- `.planning/codebase/` — architecture, stack, conventions
-- `design/spec.md` — design spec
 - `BUG_BASH.md` — known bugs and full debugging history
 - `TEST_REPORT.md` — test results
+- `.planning/codebase/` — `ARCHITECTURE`, `STACK`, `STRUCTURE`, `CONVENTIONS`, `INTEGRATIONS`, `TESTING`, `CONCERNS`
+- `design/spec.md` — design spec
 
-Read the vault before re-investigating anything. The TV connection bugs have a long history there; do not rediscover them.
+Mirrored in the Obsidian vault at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/ObsidianVault/claude-code/frame-tv-art`.
+
+Read `BUG_BASH.md` before re-investigating anything. The TV connection bugs have a long history; do not rediscover them.
 
 ## Run & test
 
